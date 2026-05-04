@@ -29,15 +29,25 @@ const STYLES: { id: SigSrc; icon: LucideIcon; label: string }[] = [
 export default function CalculatorPage() {
   const { data: bundle } = useSWR('signals', () => getSignals('signals'))
 
-  const [equity,    setEquity]   = useState(10_000)
+  // String state untuk numeric input — type="number" + value={number} bikin
+  // bug "leading zero" di Chrome (02000 ga bisa dihapus). Pakai string + parse.
+  const [equity,    setEquity]   = useState('10000')
+  const [leverage,  setLeverage] = useState('100')
   const [profile,   setProfile]  = useState<RiskProfile>('moderat')
-  const [leverage,  setLeverage] = useState(100)
   const [sigSrc,    setSigSrc]   = useState<SigSrc>('intraday')
-  const [entry,     setEntry]    = useState(0)
-  const [sl,        setSl]       = useState(0)
-  const [tp1,       setTp1]      = useState(0)
-  const [tp2,       setTp2]      = useState(0)
-  const [tp3,       setTp3]      = useState(0)
+  const [entry,     setEntry]    = useState('')
+  const [sl,        setSl]       = useState('')
+  const [tp1,       setTp1]      = useState('')
+  const [tp2,       setTp2]      = useState('')
+  const [tp3,       setTp3]      = useState('')
+
+  const equityNum   = Number(equity)   || 0
+  const leverageNum = Number(leverage) || 1
+  const entryNum    = Number(entry)    || 0
+  const slNum       = Number(sl)       || 0
+  const tp1Num      = Number(tp1)      || 0
+  const tp2Num      = Number(tp2)      || 0
+  const tp3Num      = Number(tp3)      || 0
   const [side,      setSide]     = useState<'LONG' | 'SHORT'>('LONG')
   const [plan,      setPlan]     = useState<PositionPlan | null>(null)
   const [loading,   setLoading]  = useState(false)
@@ -50,11 +60,11 @@ export default function CalculatorPage() {
   }
   const selectedSig = sigSrc !== 'manual' ? sigMap[sigSrc] : null
 
-  const resolvedEntry = sigSrc !== 'manual' && selectedSig ? selectedSig.entry : entry
-  const resolvedSl    = sigSrc !== 'manual' && selectedSig ? selectedSig.sl    : sl
-  const resolvedTp1   = sigSrc !== 'manual' && selectedSig ? selectedSig.tp1   : tp1
-  const resolvedTp2   = sigSrc !== 'manual' && selectedSig ? selectedSig.tp2   : tp2
-  const resolvedTp3   = sigSrc !== 'manual' && selectedSig ? selectedSig.tp3   : tp3
+  const resolvedEntry = sigSrc !== 'manual' && selectedSig ? selectedSig.entry : entryNum
+  const resolvedSl    = sigSrc !== 'manual' && selectedSig ? selectedSig.sl    : slNum
+  const resolvedTp1   = sigSrc !== 'manual' && selectedSig ? selectedSig.tp1   : tp1Num
+  const resolvedTp2   = sigSrc !== 'manual' && selectedSig ? selectedSig.tp2   : tp2Num
+  const resolvedTp3   = sigSrc !== 'manual' && selectedSig ? selectedSig.tp3   : tp3Num
   const resolvedSide  = sigSrc !== 'manual' && selectedSig && selectedSig.side !== 'FLAT'
     ? selectedSig.side as 'LONG' | 'SHORT'
     : side
@@ -64,7 +74,7 @@ export default function CalculatorPage() {
     setErr('')
     try {
       const result = await calcPosition({
-        equity_usd: equity,
+        equity_usd: equityNum,
         entry:  resolvedEntry || bundle?.xau_price || 3000,
         sl:     resolvedSl    || (bundle?.xau_price ?? 3000) - 10,
         tp1:    resolvedTp1   || (bundle?.xau_price ?? 3000) + 15,
@@ -72,7 +82,7 @@ export default function CalculatorPage() {
         tp3:    resolvedTp3   || (bundle?.xau_price ?? 3000) + 50,
         side:   resolvedSide,
         profile,
-        broker_max_leverage: leverage,
+        broker_max_leverage: leverageNum,
         custom_risk_pct: null,
       })
       setPlan(result)
@@ -82,6 +92,9 @@ export default function CalculatorPage() {
       setLoading(false)
     }
   }
+
+  // Strip leading zeros + non-digit chars (allow empty state for clear)
+  const cleanNum = (v: string) => v.replace(/[^\d.]/g, '').replace(/^0+(?=\d)/, '')
 
   return (
     <main className="max-w-lg mx-auto px-4 pt-4 pb-2 animate-fade-in">
@@ -132,17 +145,21 @@ export default function CalculatorPage() {
         <Group title="Akun">
           <Field label="Modal (USD)">
             <input
-              type="number"
+              type="text"
+              inputMode="numeric"
               value={equity}
-              onChange={e => setEquity(Number(e.target.value))}
+              onChange={e => setEquity(cleanNum(e.target.value))}
+              placeholder="10000"
               className="w-full bg-slate-900/40 border border-slate-700/60 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-sky-500 tabular-nums"
             />
           </Field>
           <Field label="Leverage broker">
             <input
-              type="number"
+              type="text"
+              inputMode="numeric"
               value={leverage}
-              onChange={e => setLeverage(Number(e.target.value))}
+              onChange={e => setLeverage(cleanNum(e.target.value))}
+              placeholder="100"
               className="w-full bg-slate-900/40 border border-slate-700/60 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-sky-500 tabular-nums"
             />
           </Field>
@@ -201,9 +218,10 @@ export default function CalculatorPage() {
                   <label key={label} className="block">
                     <span className="text-[10px] text-slate-500 uppercase tracking-wide">{label}</span>
                     <input
-                      type="number"
-                      value={val || ''}
-                      onChange={e => set(Number(e.target.value))}
+                      type="text"
+                      inputMode="decimal"
+                      value={val}
+                      onChange={e => set(cleanNum(e.target.value))}
                       placeholder={fmtPrice(bundle?.xau_price ?? 3000)}
                       className="mt-0.5 w-full bg-slate-900/40 border border-slate-700/60 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-sky-500 tabular-nums"
                     />

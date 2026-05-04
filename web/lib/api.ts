@@ -169,15 +169,85 @@ export async function getRiskProfiles() {
   return RISK_PROFILES
 }
 
-// ── Backtest (deferred — needs Vercel API route or Supabase Edge Function) ─────
+// ── Backtest (Vercel Edge API: /api/backtest, Monte Carlo TS port) ─────────────
 
-export async function runBacktest(_params: {
+export interface MCBacktestRequest {
+  starting_equity: number
+  risk_per_trade:  number    // 0..1
+  n_runs:          number
+  n_trades?:       number    // default 100
+  win_rate?:       number    // default 0.5
+  avg_win_r?:      number    // default 1.5
+  avg_loss_r?:     number    // default -1
+  blowup_dd_pct?:  number    // default 0.5
+}
+
+export interface MCBacktestResult {
+  inputs: Required<MCBacktestRequest>
+  percentiles: {
+    final_equity: { p5: number; p25: number; p50: number; p75: number; p95: number }
+    max_drawdown: { p5: number; p50: number; p95: number }
+  }
+  probabilities: {
+    profit: number; drawdown_30: number; drawdown_50: number; blowup: number
+  }
+  expected_return_pct: number
+  expectancy_r: number
+  n_runs: number
+  duration_ms: number
+}
+
+export async function runBacktest(params: MCBacktestRequest): Promise<MCBacktestResult> {
+  const res = await fetch('/api/backtest', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`Backtest gagal HTTP ${res.status}: ${text}`)
+  }
+  return res.json()
+}
+
+// Legacy alias - dipakai oleh halaman /more/backtest sebelum refactor.
+export async function runBacktestLegacy(params: {
   interval: string
   starting_equity: number
   risk_per_trade: number
   mc_runs: number
 }): Promise<BacktestResult> {
-  throw new Error('Backtest belum tersedia tanpa backend. Akan diimplement sebagai Vercel Edge function di update berikutnya.')
+  // Bridge ke MC engine baru. Map field name lama -> baru.
+  const mc = await runBacktest({
+    starting_equity: params.starting_equity,
+    risk_per_trade:  params.risk_per_trade,
+    n_runs:          params.mc_runs,
+  })
+  // Adapt ke shape BacktestResult lama (pseudo, data utama ada di MC).
+  return {
+    stats: {
+      n_trades:         mc.inputs.n_trades,
+      win_rate:         mc.inputs.win_rate,
+      expectancy_r:     mc.expectancy_r,
+      total_return_pct: mc.expected_return_pct,
+      max_drawdown_pct: mc.percentiles.max_drawdown.p50,
+      sharpe:           0,
+    },
+    monte_carlo: {
+      final_equity_p5:  mc.percentiles.final_equity.p5,
+      final_equity_p50: mc.percentiles.final_equity.p50,
+      final_equity_p95: mc.percentiles.final_equity.p95,
+      max_dd_p5:        mc.percentiles.max_drawdown.p5,
+      max_dd_p50:       mc.percentiles.max_drawdown.p50,
+      prob_profit:      mc.probabilities.profit,
+      prob_30pct_dd:    mc.probabilities.drawdown_30,
+      prob_blowup:      mc.probabilities.blowup,
+      starting_equity:  mc.inputs.starting_equity,
+    },
+    n_bars:       0,
+    equity_curve: [],
+    trades:       [],
+  }
 }
 
 // ── Chart data (deferred — daemon could push or use external API) ──────────────
