@@ -30,8 +30,8 @@ export default function DaemonPage() {
   )
 
   const installScript = buildInstallScript(SUPABASE_URL, SUPABASE_KEY, showSecrets)
-  const updateScript = buildUpdateScript()
-  const serviceScript = buildServiceScript()
+  const updateScript  = buildUpdateScript()
+  const serviceScript = buildServiceScript(SUPABASE_URL, SUPABASE_KEY)
 
   return (
     <main className="max-w-lg mx-auto px-4 pt-4 pb-2 space-y-4 animate-fade-in">
@@ -112,22 +112,8 @@ export default function DaemonPage() {
       {activeTab === 'install' && (
         <>
           <Section
-            title="1. Install Python 3.11+"
-            sub="Cek versi: ketik di PowerShell → python --version. Kalau belum ada, download winget install Python.Python.3.13"
-          >
-            <CodeBlock code="winget install Python.Python.3.13" />
-          </Section>
-
-          <Section
-            title="2. Install Git"
-            sub="Cek: git --version. Kalau belum ada:"
-          >
-            <CodeBlock code="winget install Git.Git" />
-          </Section>
-
-          <Section
-            title="3. Install daemon yeehee"
-            sub="Copy-paste 1 perintah ini di PowerShell. Otomatis: clone repo, setup venv, install dependencies, generate config, run daemon."
+            title="One-liner Install"
+            sub="Buka PowerShell biasa (BUKAN CMD), paste 1 baris ini, Enter sekali. Auto: install Python+Git kalau belum ada, clone repo, setup venv, install deps, write config, run daemon."
           >
             <div className="flex items-center gap-2 mb-2">
               <button
@@ -137,17 +123,34 @@ export default function DaemonPage() {
                 {showSecrets ? <EyeOff size={11} /> : <Eye size={11} />}
                 {showSecrets ? 'sembunyikan' : 'tampilkan'} kredensial
               </button>
-              <p className="text-[10px] text-slate-500">Saat dipaste tetap include kredensial.</p>
+              <p className="text-[10px] text-slate-500">Saat copy tetap include kredensial.</p>
             </div>
             <CodeBlock code={installScript} multiline />
           </Section>
 
           <Section
-            title="4. Verifikasi"
+            title="Yang dilakukan script"
+            sub="Untuk transparansi — script-nya sudah open source di repo daemon/."
+          >
+            <ol className="text-[11px] text-slate-400 list-decimal pl-5 space-y-1 leading-relaxed">
+              <li>Bypass execution policy (per-process)</li>
+              <li>Cek Python 3.13 + Git, auto-install via winget kalau belum ada</li>
+              <li>Clone <span className="font-mono text-slate-300">github.com/proreyhanwijaya111/yeehee</span> ke <span className="font-mono text-slate-300">$HOME\yeehee-daemon</span></li>
+              <li>Setup Python venv + install <span className="font-mono">daemon/requirements.txt</span></li>
+              <li>Tulis <span className="font-mono">.env</span> dengan kredensial Supabase</li>
+              <li>Run <span className="font-mono">python -m daemon.main</span> di window aktif</li>
+            </ol>
+          </Section>
+
+          <Section
+            title="Verifikasi"
             sub="Setelah daemon jalan, refresh halaman ini. Status di atas akan jadi 🟢 ONLINE dalam 1-2 menit."
           >
             <p className="text-[11px] text-slate-400">
-              Window PowerShell akan tetap kebuka — itu daemonnya. Untuk auto-start saat boot, lihat tab <span className="font-bold">Auto-start</span>.
+              Window PowerShell akan tetap kebuka — itu daemon-nya jalan. Untuk auto-start saat boot Windows (ga perlu PowerShell window terus kebuka), lihat tab <span className="font-bold">Auto-start</span>.
+            </p>
+            <p className="text-[11px] text-amber-400 mt-2">
+              ⚠️ Daemon ini terisolasi dari Mira WA Worker — folder beda (<span className="font-mono">yeehee-daemon</span> vs <span className="font-mono">mira-wa-worker</span>), port beda (3031 vs 3030), proses beda. Aman jalan barengan.
             </p>
           </Section>
         </>
@@ -192,103 +195,44 @@ export default function DaemonPage() {
 
 function buildInstallScript(supaUrl: string, supaKey: string, show: boolean): string {
   const url = supaUrl || 'YOUR_SUPABASE_URL'
-  const key = show ? (supaKey || 'YOUR_SUPABASE_ANON_KEY') : (supaKey ? supaKey.slice(0, 20) + '••••••••' : 'YOUR_SUPABASE_ANON_KEY')
-  // Single-block PowerShell — paste-and-go, bypasses execution policy, auto-installs Python+Git, no venv activation needed
-  return [
-    `# yeehee daemon — bulletproof install + run`,
-    `# Paste seluruh block ini ke PowerShell (bukan CMD), tekan Enter sekali. Selesai.`,
-    `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force`,
-    `$ErrorActionPreference = 'Stop'`,
-    `$Dest = "$HOME\\yeehee-daemon"`,
-    ``,
-    `function Refresh-Path { $env:PATH = [Environment]::GetEnvironmentVariable("PATH","Machine") + ";" + [Environment]::GetEnvironmentVariable("PATH","User") }`,
-    ``,
-    `function Ensure-Tool($Cmd, $WingetId, $Label) {`,
-    `  if (-not (Get-Command $Cmd -ErrorAction SilentlyContinue)) {`,
-    `    Write-Host "[yeehee] $Label belum ada — install via winget (sekali aja)..." -ForegroundColor Yellow`,
-    `    winget install --id $WingetId -e --accept-source-agreements --accept-package-agreements --silent`,
-    `    Refresh-Path`,
-    `  }`,
-    `}`,
-    ``,
-    `try {`,
-    `  Ensure-Tool python  Python.Python.3.13  "Python 3.13"`,
-    `  Ensure-Tool git     Git.Git             "Git"`,
-    `  Refresh-Path`,
-    ``,
-    `  Write-Host "[yeehee] 1/5 Cloning repo..." -ForegroundColor Cyan`,
-    `  if (Test-Path $Dest) { Set-Location $Dest; git pull --rebase --autostash }`,
-    `  else { git clone ${REPO_URL} $Dest; Set-Location $Dest }`,
-    ``,
-    `  Write-Host "[yeehee] 2/5 Creating venv..." -ForegroundColor Cyan`,
-    `  if (-not (Test-Path .\\.venv\\Scripts\\python.exe)) { python -m venv .venv }`,
-    `  $Py = "$Dest\\.venv\\Scripts\\python.exe"`,
-    ``,
-    `  Write-Host "[yeehee] 3/5 Installing deps (~2-4 min sekali aja)..." -ForegroundColor Cyan`,
-    `  & $Py -m pip install --upgrade pip --quiet`,
-    `  & $Py -m pip install -r daemon\\requirements.txt --quiet`,
-    ``,
-    `  Write-Host "[yeehee] 4/5 Writing .env..." -ForegroundColor Cyan`,
-    `  $EnvLines = @(`,
-    `    "SUPABASE_URL=${url}",`,
-    `    "SUPABASE_ANON_KEY=${key}",`,
-    `    "DAEMON_USER_ID=default",`,
-    `    "DAEMON_PORT=3031"`,
-    `  )`,
-    `  [System.IO.File]::WriteAllLines("$Dest\\.env", $EnvLines, (New-Object System.Text.UTF8Encoding $False))`,
-    ``,
-    `  Write-Host "[yeehee] 5/5 Starting daemon (Ctrl+C kalau mau stop)..." -ForegroundColor Green`,
-    `  & $Py -m daemon.main`,
-    `}`,
-    `catch {`,
-    `  Write-Host ""`,
-    `  Write-Host "[yeehee] ❌ ERROR: $_" -ForegroundColor Red`,
-    `  Write-Host "Tekan Enter untuk tutup window..."`,
-    `  Read-Host | Out-Null`,
-    `}`,
-  ].join('\n')
+  const key = show
+    ? (supaKey || 'YOUR_SUPABASE_ANON_KEY')
+    : (supaKey ? supaKey.slice(0, 20) + '••••••••' : 'YOUR_SUPABASE_ANON_KEY')
+  // Single-line bootstrap — pattern same as Clinix Mira worker.
+  // Script body served from /api/setup/script (always latest, no clipboard fragility).
+  return (
+    `Set-ExecutionPolicy -Scope Process Bypass -Force; ` +
+    `iwr https://yeehee.vercel.app/api/setup/script -OutFile $env:TEMP\\yeehee-setup.ps1; ` +
+    `& $env:TEMP\\yeehee-setup.ps1 -SupabaseUrl '${url}' -SupabaseAnonKey '${key}'`
+  )
 }
 
 function buildUpdateScript(): string {
   return [
-    `# Update daemon ke versi terbaru`,
-    `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force`,
+    `# Update daemon: pull versi terbaru lalu restart`,
+    `Set-ExecutionPolicy -Scope Process Bypass -Force`,
     `$Dest = "$HOME\\yeehee-daemon"`,
     `Set-Location $Dest`,
     `git pull --rebase --autostash`,
     `& .\\.venv\\Scripts\\python.exe -m pip install -r daemon\\requirements.txt --quiet`,
-    `Write-Host "[yeehee] Restart daemon..." -ForegroundColor Green`,
+    ``,
+    `# Kalau jalan sebagai Service:`,
+    `# net stop yeehee-signal-daemon; net start yeehee-signal-daemon`,
+    ``,
+    `# Kalau jalan foreground (window manual): Ctrl+C window lama, run ini:`,
     `& .\\.venv\\Scripts\\python.exe -m daemon.main`,
   ].join('\n')
 }
 
-function buildServiceScript(): string {
-  return [
-    `# Install daemon sebagai Windows Service (auto-start saat boot)`,
-    `# Buka PowerShell sebagai Administrator, paste, Enter`,
-    `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force`,
-    `if (-not (Get-Command nssm -ErrorAction SilentlyContinue)) {`,
-    `  winget install --id NSSM.NSSM -e --accept-source-agreements --accept-package-agreements --silent`,
-    `  $env:PATH = [Environment]::GetEnvironmentVariable("PATH","Machine") + ";" + [Environment]::GetEnvironmentVariable("PATH","User")`,
-    `}`,
-    ``,
-    `$DaemonDir  = "$HOME\\yeehee-daemon"`,
-    `$PythonExe  = "$DaemonDir\\.venv\\Scripts\\python.exe"`,
-    ``,
-    `nssm install yeehee-daemon $PythonExe -m daemon.main`,
-    `nssm set   yeehee-daemon AppDirectory $DaemonDir`,
-    `nssm set   yeehee-daemon DisplayName "yeehee XAU Signal Daemon"`,
-    `nssm set   yeehee-daemon Description "9-agent LLM signal worker + Mira chatbot consumer"`,
-    `nssm set   yeehee-daemon Start SERVICE_AUTO_START`,
-    `nssm set   yeehee-daemon AppStdout "$DaemonDir\\daemon.log"`,
-    `nssm set   yeehee-daemon AppStderr "$DaemonDir\\daemon.error.log"`,
-    `nssm set   yeehee-daemon AppRotateFiles 1`,
-    `nssm set   yeehee-daemon AppRotateBytes 10485760`,
-    ``,
-    `net start yeehee-daemon`,
-    `Write-Host "[yeehee] Service installed & started ✅" -ForegroundColor Green`,
-    `Write-Host "Cek status: net query yeehee-daemon"`,
-  ].join('\n')
+function buildServiceScript(supaUrl: string, supaKey: string): string {
+  const url = supaUrl || 'YOUR_SUPABASE_URL'
+  const key = supaKey || 'YOUR_SUPABASE_ANON_KEY'
+  return (
+    `# Install sebagai Windows Service (auto-start saat boot). Run as Administrator.\n` +
+    `Set-ExecutionPolicy -Scope Process Bypass -Force; ` +
+    `iwr https://yeehee.vercel.app/api/setup/script -OutFile $env:TEMP\\yeehee-setup.ps1; ` +
+    `& $env:TEMP\\yeehee-setup.ps1 -SupabaseUrl '${url}' -SupabaseAnonKey '${key}' -InstallServiceOnly`
+  )
 }
 
 // ─── UI Bits ─────────────────────────────────────────────────────────────────
