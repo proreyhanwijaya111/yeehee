@@ -1,7 +1,7 @@
 'use client'
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { ArrowLeft, ChevronDown, Loader2, RotateCcw } from 'lucide-react'
+import { ArrowLeft, ChevronDown, Loader2, RotateCcw, Cpu } from 'lucide-react'
 import {
   getAppSettings, updateAppSettings,
   getAgentConfigs, updateAgentConfig,
@@ -12,20 +12,27 @@ import {
 } from '@/lib/settings'
 import { fetchModelsForProvider, type LLMModel } from '@/lib/llm-models'
 
-const TIMEFRAME_OPTIONS = ['scalping', 'intraday', 'swing'] as const
+const TIMEFRAMES = ['scalping', 'intraday', 'swing'] as const
+
+const TIERS = [
+  { tier: '1 - Bias',     agents: ['htf_bias', 'session_phase'] },
+  { tier: '2 - Trigger',  agents: ['ltf_technical', 'liquidity_smc', 'order_flow'] },
+  { tier: '3 - Risk',     agents: ['news_proximity', 'volatility'] },
+  { tier: '4 - Meta',     agents: ['devils_advocate'] },
+  { tier: 'Final',        agents: ['synthesizer'] },
+]
 
 export default function AgentsSettingsPage() {
-  const [settings, setSettings] = useState<AppSettings | null>(null)
-  const [configs, setConfigs] = useState<Map<string, AgentConfig>>(new Map())
+  const [settings,  setSettings]  = useState<AppSettings | null>(null)
+  const [configs,   setConfigs]   = useState<Map<string, AgentConfig>>(new Map())
   const [providers, setProviders] = useState<Map<string, ProviderKey>>(new Map())
-  const [loading, setLoading] = useState(true)
+  const [loading,   setLoading]   = useState(true)
 
   useEffect(() => {
     Promise.all([getAppSettings(), getAgentConfigs(), getProviderKeys()]).then(([s, a, p]) => {
       setSettings(s)
       const c = new Map<string, AgentConfig>()
       a.forEach(x => c.set(x.agent_name, x))
-      // Fill missing with defaults
       AGENT_NAMES.forEach(n => {
         if (!c.has(n)) {
           c.set(n, {
@@ -63,109 +70,95 @@ export default function AgentsSettingsPage() {
     if (!confirm('Reset semua agent ke default?')) return
     for (const n of AGENT_NAMES) {
       await updateAgentConfig(n, {
-        enabled: true,
-        llm_provider: null,
-        llm_model: null,
-        temperature: 0.4,
-        max_tokens: 800,
-        weight: 1.0,
-        timeframes: ['scalping', 'intraday', 'swing'],
-        custom_prompt: null,
+        enabled: true, llm_provider: null, llm_model: null,
+        temperature: 0.4, max_tokens: 800, weight: 1.0,
+        timeframes: ['scalping', 'intraday', 'swing'], custom_prompt: null,
       })
     }
     location.reload()
   }
 
   return (
-    <main className="max-w-lg mx-auto px-4 pt-4 pb-2 space-y-4 animate-fade-in">
-      <header className="flex items-center gap-2">
-        <Link href="/more/settings" className="p-1.5 hover:bg-slate-800 rounded-lg">
+    <main className="max-w-lg mx-auto px-4 pt-4 pb-2 animate-fade-in">
+      <header className="flex items-center gap-2 mb-4">
+        <Link href="/more/settings" className="p-1.5 -ml-1.5 hover:bg-slate-800 rounded-lg" aria-label="Kembali">
           <ArrowLeft size={18} className="text-slate-400" />
         </Link>
-        <div className="flex-1">
-          <h1 className="text-lg font-black text-slate-100">9 AI Agent</h1>
-          <p className="text-[11px] text-slate-400">Tier pipeline: bias → trigger → risk → meta → synth.</p>
+        <div className="w-8 h-8 rounded-lg bg-sky-700/30 border border-sky-600/30 flex items-center justify-center">
+          <Cpu size={16} className="text-sky-300" />
         </div>
-        <button onClick={resetAll} className="p-1.5 text-slate-400 hover:text-slate-200" title="Reset all">
-          <RotateCcw size={16} />
+        <div className="flex-1">
+          <h1 className="text-lg font-black text-slate-100 leading-tight">9 AI Agent</h1>
+          <p className="text-[11px] text-slate-500">Tier pipeline: bias → trigger → risk → meta → synth.</p>
+        </div>
+        <button onClick={resetAll} className="p-1.5 text-slate-500 hover:text-slate-300" title="Reset ke default">
+          <RotateCcw size={14} />
         </button>
       </header>
 
-      {/* Master switch */}
-      <section className="bg-slate-800/60 border border-slate-700/50 rounded-2xl p-4">
-        <label className="flex items-center justify-between gap-3 cursor-pointer">
-          <div>
-            <p className="text-sm font-semibold text-slate-100">Pakai LLM Agent</p>
-            <p className="text-[11px] text-slate-500 leading-relaxed">
-              Aktif: 9 LLM agent + voting. Mati: rule-engine deterministik aja.
-            </p>
-          </div>
-          <Toggle
+      <div className="space-y-5">
+        {/* Master switch */}
+        <Group title="Mode">
+          <ToggleRow
+            label="Pakai LLM agent"
+            sub="Aktif: 9 LLM agent + voting via tier pipeline. Mati: rule engine deterministik (cepat tapi ga ada nuance)."
             checked={settings.use_llm_agents}
             onChange={async v => {
               setSettings({ ...settings, use_llm_agents: v })
               await updateAppSettings({ use_llm_agents: v })
             }}
           />
-        </label>
-      </section>
+        </Group>
 
-      {/* Pipeline diagram */}
-      <section className="bg-slate-900/40 rounded-2xl p-4 border border-slate-800/50">
-        <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-2">Pipeline</p>
-        <div className="space-y-2">
-          {[
-            { tier: 'Tier 1 — Bias', agents: ['htf_bias', 'session_phase'] },
-            { tier: 'Tier 2 — Trigger', agents: ['ltf_technical', 'liquidity_smc', 'order_flow'] },
-            { tier: 'Tier 3 — Risk', agents: ['news_proximity', 'volatility'] },
-            { tier: 'Tier 4 — Meta', agents: ['devils_advocate'] },
-            { tier: 'Final', agents: ['synthesizer'] },
-          ].map(t => (
-            <div key={t.tier} className="flex items-center gap-2 text-[10px]">
-              <span className="text-slate-500 w-20 shrink-0 font-mono">{t.tier}</span>
-              <div className="flex flex-wrap gap-1">
-                {t.agents.map(a => {
-                  const c = configs.get(a)
-                  return (
-                    <span
-                      key={a}
-                      className={`px-1.5 py-0.5 rounded font-mono ${
-                        c?.enabled
-                          ? 'bg-sky-900/50 text-sky-300 border border-sky-700/40'
-                          : 'bg-slate-800 text-slate-600 line-through'
-                      }`}
-                    >
-                      {AGENT_LABELS[a as AgentName]}
-                    </span>
-                  )
-                })}
+        {/* Pipeline diagram */}
+        <Group title="Pipeline aktif">
+          <div className="px-3.5 py-3 space-y-1.5">
+            {TIERS.map(t => (
+              <div key={t.tier} className="flex items-center gap-2 text-[10px]">
+                <span className="text-slate-500 w-16 shrink-0 font-mono uppercase tracking-wider">{t.tier}</span>
+                <div className="flex flex-wrap gap-1">
+                  {t.agents.map(a => {
+                    const c = configs.get(a)
+                    return (
+                      <span
+                        key={a}
+                        className={`px-1.5 py-0.5 rounded font-mono ${
+                          c?.enabled
+                            ? 'bg-sky-900/40 text-sky-200 border border-sky-800/50'
+                            : 'bg-slate-800/60 text-slate-600 line-through'
+                        }`}
+                      >
+                        {AGENT_LABELS[a as AgentName]}
+                      </span>
+                    )
+                  })}
+                </div>
               </div>
-            </div>
-          ))}
-        </div>
-      </section>
+            ))}
+          </div>
+        </Group>
 
-      {/* Per-agent cards */}
-      <section className="space-y-3">
-        <p className="text-xs font-bold text-slate-300 uppercase tracking-wider">Konfigurasi per Agent</p>
-        {AGENT_NAMES.map(name => (
-          <AgentCard
-            key={name}
-            name={name}
-            config={configs.get(name)!}
-            globalProvider={settings.default_llm_provider}
-            globalModel={settings.default_llm_model}
-            usePerAgent={settings.use_per_agent_models}
-            providers={providers}
-            onUpdate={patch => updateLocal(name, patch)}
-          />
-        ))}
-      </section>
+        {/* Per-agent cards */}
+        <Group title="Konfigurasi per agent">
+          {AGENT_NAMES.map(name => (
+            <AgentRow
+              key={name}
+              name={name}
+              config={configs.get(name)!}
+              globalProvider={settings.default_llm_provider}
+              globalModel={settings.default_llm_model}
+              usePerAgent={settings.use_per_agent_models}
+              providers={providers}
+              onUpdate={patch => updateLocal(name, patch)}
+            />
+          ))}
+        </Group>
+      </div>
     </main>
   )
 }
 
-function AgentCard({
+function AgentRow({
   name, config, globalProvider, globalModel, usePerAgent, providers, onUpdate,
 }: {
   name: AgentName
@@ -181,69 +174,67 @@ function AgentCard({
   const [modelLoading, setModelLoading] = useState(false)
 
   const effectiveProvider = config.llm_provider ?? globalProvider
-  const effectiveModel = config.llm_model ?? globalModel
 
   useEffect(() => {
     if (!expanded || !usePerAgent) return
     const k = providers.get(effectiveProvider)
     setModelLoading(true)
     fetchModelsForProvider(effectiveProvider, k?.api_key ?? undefined, k?.base_url ?? undefined)
-      .then(setModels)
-      .catch(() => setModels([]))
+      .then(setModels).catch(() => setModels([]))
       .finally(() => setModelLoading(false))
   }, [expanded, effectiveProvider, usePerAgent, providers])
 
   return (
-    <div className="bg-slate-800/60 border border-slate-700/50 rounded-2xl overflow-hidden">
+    <div className="overflow-hidden">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-slate-800/80 transition-colors"
+        className="w-full flex items-center gap-3 px-3.5 py-3 hover:bg-slate-800/40 active:bg-slate-800/70 transition-colors"
       >
-        <div className={`w-2 h-2 rounded-full ${config.enabled ? 'bg-emerald-500' : 'bg-slate-600'}`} />
+        <span className={`w-2 h-2 rounded-full shrink-0 ${config.enabled ? 'bg-emerald-500' : 'bg-slate-600'}`} />
         <div className="flex-1 min-w-0 text-left">
-          <p className="text-sm font-semibold text-slate-100">{AGENT_LABELS[name]}</p>
-          <p className="text-[10px] text-slate-500 truncate">{AGENT_DESCRIPTIONS[name]}</p>
+          <p className="text-sm font-medium text-slate-100 leading-tight">{AGENT_LABELS[name]}</p>
+          <p className="text-[10px] text-slate-500 mt-0.5 truncate">{AGENT_DESCRIPTIONS[name]}</p>
         </div>
         {usePerAgent && config.llm_model && (
-          <span className="text-[9px] text-sky-400 font-mono">{config.llm_model.slice(0, 18)}…</span>
+          <span className="text-[9px] text-sky-400 font-mono shrink-0 max-w-[100px] truncate">
+            {config.llm_model.replace(':free', '')}
+          </span>
         )}
-        <ChevronDown size={16} className={`text-slate-500 transition-transform ${expanded ? 'rotate-180' : ''}`} />
+        <ChevronDown size={14} className={`text-slate-500 transition-transform shrink-0 ${expanded ? 'rotate-180' : ''}`} />
       </button>
 
       {expanded && (
-        <div className="px-4 pb-4 pt-1 space-y-3 border-t border-slate-700/40">
-          {/* Enable toggle */}
+        <div className="px-3.5 pb-3.5 pt-1 space-y-3 border-t border-slate-800/80">
+          {/* Enable */}
           <label className="flex items-center justify-between gap-2">
             <span className="text-xs text-slate-300">Aktif</span>
             <Toggle checked={config.enabled} onChange={v => onUpdate({ enabled: v })} />
           </label>
 
-          {/* Per-agent LLM (only if usePerAgent) */}
+          {/* Per-agent LLM */}
           {usePerAgent && (
             <>
               <div>
-                <label className="text-[11px] text-slate-400 font-semibold mb-1 block">Provider</label>
+                <label className="text-[10px] text-slate-500 uppercase tracking-wide font-semibold">Provider override</label>
                 <select
                   value={config.llm_provider ?? ''}
                   onChange={e => onUpdate({ llm_provider: e.target.value || null })}
-                  className="w-full bg-slate-900/60 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-sky-500"
+                  className="mt-1 w-full bg-slate-900/40 border border-slate-700/60 rounded-lg px-3 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-sky-500"
                 >
                   <option value="">(default: {PROVIDER_LABELS[globalProvider]})</option>
-                  {PROVIDER_LIST.map(p => (
-                    <option key={p} value={p}>{PROVIDER_LABELS[p]}</option>
-                  ))}
+                  {PROVIDER_LIST.map(p => <option key={p} value={p}>{PROVIDER_LABELS[p]}</option>)}
                 </select>
               </div>
 
               <div>
-                <label className="text-[11px] text-slate-400 font-semibold mb-1 flex items-center justify-between">
-                  Model
+                <label className="text-[10px] text-slate-500 uppercase tracking-wide font-semibold flex items-center justify-between">
+                  Model override
                   {modelLoading && <Loader2 size={10} className="animate-spin" />}
                 </label>
                 <select
                   value={config.llm_model ?? ''}
                   onChange={e => onUpdate({ llm_model: e.target.value || null })}
-                  className="w-full bg-slate-900/60 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100 font-mono focus:outline-none focus:border-sky-500"
+                  className="mt-1 w-full bg-slate-900/40 border border-slate-700/60 rounded-lg px-3 py-1.5 text-xs text-slate-100 font-mono focus:outline-none focus:border-sky-500"
                 >
                   <option value="">(default: {globalModel})</option>
                   {models.filter(m => m.free).slice(0, 50).map(m => (
@@ -254,59 +245,39 @@ function AgentCard({
             </>
           )}
 
-          {/* Temperature & weight */}
+          {/* Sliders */}
           <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-[11px] text-slate-400 font-semibold mb-1 block">
-                Temperature: <span className="text-slate-200">{config.temperature.toFixed(2)}</span>
-              </label>
-              <input
-                type="range"
-                min={0}
-                max={1}
-                step={0.05}
-                value={config.temperature}
-                onChange={e => onUpdate({ temperature: Number(e.target.value) })}
-                className="w-full accent-sky-500"
-              />
-            </div>
-            <div>
-              <label className="text-[11px] text-slate-400 font-semibold mb-1 block">
-                Weight: <span className="text-slate-200">{config.weight.toFixed(2)}</span>
-              </label>
-              <input
-                type="range"
-                min={0}
-                max={3}
-                step={0.1}
-                value={config.weight}
-                onChange={e => onUpdate({ weight: Number(e.target.value) })}
-                className="w-full accent-sky-500"
-              />
-            </div>
-          </div>
-
-          {/* Max tokens */}
-          <div>
-            <label className="text-[11px] text-slate-400 font-semibold mb-1 block">
-              Max tokens: <span className="text-slate-200">{config.max_tokens}</span>
-            </label>
-            <input
-              type="range"
-              min={100}
-              max={2000}
-              step={50}
-              value={config.max_tokens}
-              onChange={e => onUpdate({ max_tokens: Number(e.target.value) })}
-              className="w-full accent-sky-500"
+            <Slider
+              label="Temperature"
+              value={config.temperature}
+              min={0} max={1} step={0.05}
+              format={v => v.toFixed(2)}
+              onChange={v => onUpdate({ temperature: v })}
+            />
+            <Slider
+              label="Weight"
+              value={config.weight}
+              min={0} max={3} step={0.1}
+              format={v => v.toFixed(2)}
+              onChange={v => onUpdate({ weight: v })}
             />
           </div>
 
+          <Slider
+            label="Max tokens"
+            value={config.max_tokens}
+            min={100} max={2000} step={50}
+            format={v => v.toString()}
+            onChange={v => onUpdate({ max_tokens: v })}
+          />
+
           {/* Timeframes */}
           <div>
-            <label className="text-[11px] text-slate-400 font-semibold mb-1 block">Timeframes aktif</label>
-            <div className="flex gap-2">
-              {TIMEFRAME_OPTIONS.map(t => {
+            <label className="text-[10px] text-slate-500 uppercase tracking-wide font-semibold mb-1 block">
+              Timeframes aktif
+            </label>
+            <div className="grid grid-cols-3 gap-1.5">
+              {TIMEFRAMES.map(t => {
                 const selected = config.timeframes.includes(t)
                 return (
                   <button
@@ -316,10 +287,10 @@ function AgentCard({
                         ? config.timeframes.filter(x => x !== t)
                         : [...config.timeframes, t],
                     })}
-                    className={`flex-1 py-1.5 rounded-lg text-[11px] font-semibold transition-all ${
+                    className={`py-1.5 rounded-lg text-[10px] font-semibold transition-colors ${
                       selected
-                        ? 'bg-sky-700/60 text-sky-100 border border-sky-600'
-                        : 'bg-slate-900/40 text-slate-500 border border-slate-700'
+                        ? 'bg-sky-700/40 text-sky-200 border border-sky-700/60'
+                        : 'bg-slate-800/60 text-slate-500 border border-slate-700/60'
                     }`}
                   >
                     {t}
@@ -331,13 +302,15 @@ function AgentCard({
 
           {/* Custom prompt */}
           <details className="text-[11px]">
-            <summary className="text-slate-400 cursor-pointer hover:text-slate-200">Custom prompt (advanced)</summary>
+            <summary className="text-slate-500 cursor-pointer hover:text-slate-300 select-none">
+              Custom prompt (advanced)
+            </summary>
             <textarea
               value={config.custom_prompt ?? ''}
               onChange={e => onUpdate({ custom_prompt: e.target.value || null })}
               placeholder="(default system prompt)"
               rows={4}
-              className="mt-2 w-full bg-slate-900/60 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100 font-mono focus:outline-none focus:border-sky-500"
+              className="mt-2 w-full bg-slate-900/40 border border-slate-700/60 rounded-lg px-3 py-2 text-xs text-slate-100 font-mono focus:outline-none focus:border-sky-500"
             />
           </details>
         </div>
@@ -346,15 +319,67 @@ function AgentCard({
   )
 }
 
+// ─── Building blocks ──────────────────────────────────────────────────────────
+
+function Group({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section>
+      <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-widest mb-1.5 px-2">{title}</p>
+      <div className="bg-slate-800/40 rounded-2xl border border-slate-800 overflow-hidden divide-y divide-slate-800/80">
+        {children}
+      </div>
+    </section>
+  )
+}
+
+function Slider({ label, value, min, max, step, format, onChange }: {
+  label: string
+  value: number
+  min: number; max: number; step: number
+  format: (v: number) => string
+  onChange: (v: number) => void
+}) {
+  return (
+    <div>
+      <label className="text-[10px] text-slate-500 uppercase tracking-wide font-semibold flex items-center justify-between">
+        <span>{label}</span>
+        <span className="text-slate-300 font-mono">{format(value)}</span>
+      </label>
+      <input
+        type="range"
+        min={min} max={max} step={step}
+        value={value}
+        onChange={e => onChange(Number(e.target.value))}
+        className="w-full mt-1 accent-sky-500"
+      />
+    </div>
+  )
+}
+
+function ToggleRow({ label, sub, checked, onChange }: {
+  label: string; sub: string; checked: boolean; onChange: (v: boolean) => void
+}) {
+  return (
+    <label className="flex items-center justify-between gap-3 px-3.5 py-3 cursor-pointer hover:bg-slate-800/40">
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-medium text-slate-100 leading-tight">{label}</p>
+        <p className="text-[11px] text-slate-500 mt-0.5 leading-relaxed">{sub}</p>
+      </div>
+      <Toggle checked={checked} onChange={onChange} />
+    </label>
+  )
+}
+
 function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
   return (
     <button
       onClick={() => onChange(!checked)}
-      className={`w-10 h-6 rounded-full transition-colors relative shrink-0 ${
-        checked ? 'bg-emerald-600' : 'bg-slate-600'
+      type="button"
+      className={`w-9 h-5 rounded-full transition-colors relative shrink-0 ${
+        checked ? 'bg-emerald-600' : 'bg-slate-700'
       }`}
     >
-      <span className={`absolute top-0.5 w-5 h-5 bg-white rounded-full transition-transform ${
+      <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full transition-transform ${
         checked ? 'translate-x-4' : 'translate-x-0.5'
       }`} />
     </button>

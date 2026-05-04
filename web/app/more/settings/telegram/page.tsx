@@ -1,7 +1,7 @@
 'use client'
 import { useState } from 'react'
 import Link from 'next/link'
-import { ArrowLeft, Send } from 'lucide-react'
+import { ArrowLeft, Send, Check, X, Loader2 } from 'lucide-react'
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
 
@@ -18,7 +18,7 @@ async function sendTest(token: string, chatId: string) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       chat_id: Number(chatId),
-      text: '✅ yeehee test — koneksi OK! Siap menerima sinyal emas 🪙',
+      text: '[OK] yeehee test - koneksi ok. Siap menerima sinyal emas.',
     }),
   })
   const d = await r.json()
@@ -33,38 +33,35 @@ export default function TelegramSettingsPage() {
   const [tokMsg,    setTokMsg]    = useState('')
   const [msgStatus, setMsgStatus] = useState<'idle'|'ok'|'err'>('idle')
   const [msgText,   setMsgText]   = useState('')
+  const [verifying, setVerifying] = useState(false)
+  const [sending,   setSending]   = useState(false)
   const [saving,    setSaving]    = useState(false)
   const [saveMsg,   setSaveMsg]   = useState('')
 
   const handleVerify = async () => {
-    setTokStatus('idle')
-    setTokMsg('')
+    setVerifying(true); setTokStatus('idle'); setTokMsg('')
     try {
       const info = await verifyToken(token)
       setTokStatus('ok')
-      setTokMsg(`✅ @${info.username} (${info.first_name})`)
+      setTokMsg(`@${info.username} (${info.first_name})`)
     } catch (e: unknown) {
-      setTokStatus('err')
-      setTokMsg(e instanceof Error ? e.message : 'Error')
-    }
+      setTokStatus('err'); setTokMsg(e instanceof Error ? e.message : 'Error')
+    } finally { setVerifying(false) }
   }
 
   const handleSendTest = async () => {
-    setMsgStatus('idle')
-    setMsgText('')
+    setSending(true); setMsgStatus('idle'); setMsgText('')
     try {
       await sendTest(token, chatId)
       setMsgStatus('ok')
-      setMsgText('✅ Pesan terkirim! Cek Telegram lo.')
+      setMsgText('Pesan terkirim. Cek Telegram lo.')
     } catch (e: unknown) {
-      setMsgStatus('err')
-      setMsgText(e instanceof Error ? e.message : 'Error')
-    }
+      setMsgStatus('err'); setMsgText(e instanceof Error ? e.message : 'Error')
+    } finally { setSending(false) }
   }
 
   const handleSave = async () => {
-    setSaving(true)
-    setSaveMsg('')
+    setSaving(true); setSaveMsg('')
     try {
       const r = await fetch(`${API}/api/config/telegram`, {
         method: 'POST',
@@ -72,115 +69,148 @@ export default function TelegramSettingsPage() {
         body: JSON.stringify({ token, chat_id: chatId }),
       })
       if (!r.ok) throw new Error(await r.text())
-      setSaveMsg('✅ Disimpan! Restart bot untuk aktif.')
+      setSaveMsg('Disimpan. Daemon akan auto-pickup di refresh berikutnya.')
     } catch (e: unknown) {
-      setSaveMsg(`❌ ${e instanceof Error ? e.message : 'Gagal simpan'}`)
-    } finally {
-      setSaving(false)
-    }
+      setSaveMsg(`Error: ${e instanceof Error ? e.message : 'Gagal simpan'}`)
+    } finally { setSaving(false) }
   }
 
   return (
-    <main className="max-w-lg mx-auto px-4 pt-4 pb-2 space-y-4 animate-fade-in">
-      <header className="flex items-center gap-2">
-        <Link href="/more/settings" className="p-1.5 hover:bg-slate-800 rounded-lg">
+    <main className="max-w-lg mx-auto px-4 pt-4 pb-2 animate-fade-in">
+      <header className="flex items-center gap-2 mb-4">
+        <Link href="/more/settings" className="p-1.5 -ml-1.5 hover:bg-slate-800 rounded-lg" aria-label="Kembali">
           <ArrowLeft size={18} className="text-slate-400" />
         </Link>
+        <div className="w-8 h-8 rounded-lg bg-emerald-700/30 border border-emerald-600/30 flex items-center justify-center">
+          <Send size={16} className="text-emerald-300" />
+        </div>
         <div>
-          <h1 className="text-lg font-black text-slate-100">📱 Setup Telegram</h1>
-          <p className="text-[11px] text-slate-400">Push notifikasi sinyal ke HP.</p>
+          <h1 className="text-lg font-black text-slate-100 leading-tight">Telegram bot</h1>
+          <p className="text-[11px] text-slate-500">Push notifikasi sinyal ke HP via Telegram.</p>
         </div>
       </header>
 
-      <StepCard step={1} title="Buat bot Telegram">
-        <ol className="text-xs text-slate-300 space-y-1.5 leading-relaxed">
-          <li>1. Buka Telegram → cari <strong>@BotFather</strong></li>
-          <li>2. Ketik <code className="bg-slate-700 px-1 rounded">/newbot</code></li>
-          <li>3. Ikuti petunjuk → dapatkan <strong>Token</strong></li>
-          <li>4. Buka bot lo → klik <strong>Start</strong></li>
-        </ol>
-      </StepCard>
-
-      <StepCard step={2} title="Masukkan Token & Chat ID">
-        <div className="space-y-3">
-          <div className="text-xs text-slate-400 bg-slate-700/30 rounded-xl px-3 py-2.5 leading-relaxed">
-            <p className="font-semibold mb-1">Cara dapatkan Chat ID:</p>
-            <p>Buka: <code className="break-all">api.telegram.org/bot&lt;TOKEN&gt;/getUpdates</code></p>
-            <p className="mt-1">Cari <code>&quot;id&quot;:</code> di dalam bagian <code>&quot;chat&quot;</code></p>
+      <div className="space-y-5">
+        {/* Step 1 */}
+        <Group title="Langkah 1 - buat bot Telegram">
+          <div className="px-3.5 py-3 text-[11px] text-slate-400 leading-relaxed">
+            <ol className="list-decimal pl-4 space-y-1">
+              <li>Buka Telegram, cari <strong className="text-slate-200">@BotFather</strong></li>
+              <li>Ketik <code className="bg-slate-900/60 px-1.5 py-0.5 rounded font-mono">/newbot</code></li>
+              <li>Ikuti petunjuk → dapatkan <strong className="text-slate-200">Token</strong></li>
+              <li>Buka bot lo → klik <strong className="text-slate-200">Start</strong></li>
+            </ol>
           </div>
+        </Group>
 
-          <input
-            type="text"
-            value={token}
-            onChange={e => setToken(e.target.value)}
-            placeholder="Bot Token: 1234567890:ABCdef..."
-            className="w-full bg-slate-700/50 border border-slate-600 rounded-xl px-3 py-2.5 text-sm text-slate-100 focus:outline-none focus:border-sky-500 font-mono"
-          />
+        {/* Step 2 */}
+        <Group title="Langkah 2 - masukkan kredensial">
+          <div className="px-3.5 py-3 space-y-3">
+            <div className="bg-slate-900/40 rounded-lg px-3 py-2 text-[11px] text-slate-500 leading-relaxed border border-slate-800">
+              <p className="font-semibold text-slate-300 mb-1">Cara dapatkan Chat ID:</p>
+              <p>Buka <code className="font-mono break-all">api.telegram.org/bot&lt;TOKEN&gt;/getUpdates</code></p>
+              <p className="mt-1">Cari <code className="font-mono">&quot;id&quot;:</code> di dalam <code className="font-mono">&quot;chat&quot;</code></p>
+            </div>
 
-          <input
-            type="text"
-            value={chatId}
-            onChange={e => setChatId(e.target.value)}
-            placeholder="Chat ID: 123456789"
-            className="w-full bg-slate-700/50 border border-slate-600 rounded-xl px-3 py-2.5 text-sm text-slate-100 focus:outline-none focus:border-sky-500 font-mono"
-          />
+            <Field label="Bot Token">
+              <input
+                type="text"
+                value={token}
+                onChange={e => setToken(e.target.value)}
+                placeholder="1234567890:ABCdef..."
+                className="w-full bg-slate-900/40 border border-slate-700/60 rounded-lg px-3 py-2 text-xs text-slate-100 font-mono focus:outline-none focus:border-sky-500"
+              />
+            </Field>
 
-          <div className="flex gap-2">
-            <button
-              onClick={handleVerify}
-              disabled={!token}
-              className="flex-1 py-2.5 bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm font-semibold rounded-xl transition-all touch-action disabled:opacity-40"
-            >
-              🔍 Verifikasi
-            </button>
-            <button
-              onClick={handleSendTest}
-              disabled={!token || !chatId}
-              className="flex-1 py-2.5 bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm font-semibold rounded-xl transition-all touch-action disabled:opacity-40 flex items-center justify-center gap-1"
-            >
-              <Send size={14} /> Test
-            </button>
+            <Field label="Chat ID">
+              <input
+                type="text"
+                value={chatId}
+                onChange={e => setChatId(e.target.value)}
+                placeholder="123456789"
+                className="w-full bg-slate-900/40 border border-slate-700/60 rounded-lg px-3 py-2 text-xs text-slate-100 font-mono focus:outline-none focus:border-sky-500"
+              />
+            </Field>
+
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={handleVerify}
+                disabled={!token || verifying}
+                className="py-2 bg-slate-800/80 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg transition-colors disabled:opacity-40 flex items-center justify-center gap-1.5"
+              >
+                {verifying ? <Loader2 size={12} className="animate-spin" /> : null}
+                Verifikasi token
+              </button>
+              <button
+                onClick={handleSendTest}
+                disabled={!token || !chatId || sending}
+                className="py-2 bg-slate-800/80 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg transition-colors disabled:opacity-40 flex items-center justify-center gap-1.5"
+              >
+                {sending ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />}
+                Test kirim
+              </button>
+            </div>
+
+            {tokMsg && (
+              <Result status={tokStatus} text={tokMsg} />
+            )}
+            {msgText && (
+              <Result status={msgStatus} text={msgText} />
+            )}
           </div>
+        </Group>
 
-          {tokMsg && (
-            <p className={`text-xs ${tokStatus === 'ok' ? 'text-green-400' : 'text-red-400'}`}>{tokMsg}</p>
-          )}
-          {msgText && (
-            <p className={`text-xs ${msgStatus === 'ok' ? 'text-green-400' : 'text-red-400'}`}>{msgText}</p>
-          )}
-        </div>
-      </StepCard>
-
-      <StepCard step={3} title="Simpan & Aktifkan">
-        <button
-          onClick={handleSave}
-          disabled={!token || !chatId || saving}
-          className="w-full py-3 bg-green-700 hover:bg-green-600 active:bg-green-800 text-white font-bold rounded-xl transition-all touch-action disabled:opacity-40"
-        >
-          {saving ? 'Menyimpan...' : '💾 Simpan'}
-        </button>
-        {saveMsg && (
-          <p className={`text-xs mt-2 ${saveMsg.startsWith('✅') ? 'text-green-400' : 'text-red-400'}`}>
-            {saveMsg}
-          </p>
-        )}
-      </StepCard>
+        {/* Step 3 */}
+        <Group title="Langkah 3 - simpan">
+          <div className="px-3.5 py-3">
+            <button
+              onClick={handleSave}
+              disabled={!token || !chatId || saving}
+              className="w-full py-2.5 bg-emerald-700/80 hover:bg-emerald-600 active:bg-emerald-800 text-white font-semibold text-sm rounded-lg transition-colors disabled:opacity-40 flex items-center justify-center gap-2"
+            >
+              {saving ? <Loader2 size={14} className="animate-spin" /> : null}
+              Simpan ke konfigurasi
+            </button>
+            {saveMsg && (
+              <p className={`text-[11px] mt-2 ${saveMsg.startsWith('Error') ? 'text-rose-400' : 'text-emerald-400'}`}>
+                {saveMsg}
+              </p>
+            )}
+          </div>
+        </Group>
+      </div>
     </main>
   )
 }
 
-function StepCard({ step, title, children }: {
-  step: number; title: string; children: React.ReactNode
-}) {
+function Group({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="bg-slate-800/60 rounded-2xl border border-slate-700/50 p-4">
-      <div className="flex items-center gap-2 mb-3">
-        <span className="w-6 h-6 rounded-full bg-sky-600 text-white text-xs font-bold flex items-center justify-center shrink-0">
-          {step}
-        </span>
-        <p className="font-semibold text-sm text-slate-100">{title}</p>
+    <section>
+      <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-widest mb-1.5 px-2">{title}</p>
+      <div className="bg-slate-800/40 rounded-2xl border border-slate-800 overflow-hidden divide-y divide-slate-800/80">
+        {children}
       </div>
-      {children}
+    </section>
+  )
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label className="block">
+      <span className="text-[10px] text-slate-500 uppercase tracking-wide font-semibold">{label}</span>
+      <div className="mt-1">{children}</div>
+    </label>
+  )
+}
+
+function Result({ status, text }: { status: 'idle'|'ok'|'err'; text: string }) {
+  if (status === 'idle') return null
+  return (
+    <div className={`flex items-start gap-2 px-2.5 py-2 rounded-lg text-[11px] ${
+      status === 'ok' ? 'bg-emerald-950/30 text-emerald-300' : 'bg-rose-950/30 text-rose-300'
+    }`}>
+      {status === 'ok' ? <Check size={13} className="shrink-0 mt-0.5" /> : <X size={13} className="shrink-0 mt-0.5" />}
+      <span>{text}</span>
     </div>
   )
 }

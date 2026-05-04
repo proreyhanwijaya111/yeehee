@@ -42,80 +42,81 @@ export default function DaemonPage() {
   )
 
   return (
-    <main className="max-w-lg mx-auto px-4 pt-4 pb-2 space-y-4 animate-fade-in">
-      <header className="flex items-center gap-2">
-        <Link href="/more/settings" className="p-1.5 hover:bg-slate-800 rounded-lg">
+    <main className="max-w-lg mx-auto px-4 pt-4 pb-2 animate-fade-in">
+      <header className="flex items-center gap-2 mb-4">
+        <Link href="/more/settings" className="p-1.5 -ml-1.5 hover:bg-slate-800 rounded-lg" aria-label="Kembali">
           <ArrowLeft size={18} className="text-slate-400" />
         </Link>
+        <div className="w-8 h-8 rounded-lg bg-pink-700/30 border border-pink-600/30 flex items-center justify-center">
+          <Server size={16} className="text-pink-300" />
+        </div>
         <div>
-          <h1 className="text-lg font-black text-slate-100">Daemon PC Rumah</h1>
-          <p className="text-[11px] text-slate-400">Worker Python signal engine + Mira queue.</p>
+          <h1 className="text-lg font-black text-slate-100 leading-tight">Daemon PC rumah</h1>
+          <p className="text-[11px] text-slate-500">Worker Python signal engine + Mira queue.</p>
         </div>
       </header>
 
-      {/* Status */}
-      <section className={`rounded-2xl border p-4 ${
-        online ? 'bg-emerald-950/40 border-emerald-700/40' : 'bg-amber-950/40 border-amber-700/40'
-      }`}>
-        <div className="flex items-start gap-3">
-          <div className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 ${
-            online ? 'bg-emerald-600/30' : 'bg-amber-600/30'
-          }`}>
-            <Server size={18} className={online ? 'text-emerald-300' : 'text-amber-300'} />
-          </div>
+      <div className="space-y-5">
+        {/* Status pill (compact) */}
+        <div className="bg-slate-900/60 border border-slate-800 rounded-xl px-3.5 py-3 flex items-center gap-3">
+          <span className={`w-2 h-2 rounded-full shrink-0 ${
+            online
+              ? 'bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.6)]'
+              : 'bg-amber-500'
+          }`} />
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold text-slate-100">
-              {online ? '🟢 ONLINE' : '🟡 OFFLINE'}
+            <p className="text-xs font-semibold text-slate-200">
+              {online ? 'Daemon online' : 'Daemon offline'}
             </p>
-            <p className="text-[11px] text-slate-400 mt-0.5">
-              {hb?.hostname && <>Host: <span className="font-mono">{hb.hostname}</span></>}
-              {hb?.last_signal_at && <> · sinyal terakhir {timeAgo(hb.last_signal_at)}</>}
-              {!hb && <>Daemon belum pernah connect.</>}
+            <p className="text-[10px] text-slate-500 truncate">
+              {hb?.hostname && <span className="font-mono">{hb.hostname}</span>}
+              {hb?.last_signal_at && <> · signal {timeAgo(hb.last_signal_at)}</>}
+              {!hb && <>belum pernah connect</>}
+              {hb?.error && <span className="text-rose-400"> · {hb.error.slice(0, 40)}</span>}
             </p>
-            {hb?.error && (
-              <p className="text-[10px] text-red-400 mt-1 font-mono">{hb.error}</p>
-            )}
           </div>
         </div>
-      </section>
 
-      {/* Architecture */}
-      <details className="bg-slate-800/40 rounded-2xl border border-slate-700/40">
-        <summary className="px-4 py-3 cursor-pointer text-xs text-slate-300 font-semibold">
-          🧠 Cara kerja daemon
-        </summary>
-        <div className="px-4 pb-4 space-y-2 text-[11px] text-slate-400 leading-relaxed">
-          <p>Daemon ini script Python yang jalan di PC rumah lo. Tiap N menit:</p>
-          <ol className="list-decimal pl-5 space-y-1">
-            <li>Pull config (provider key, model, agent settings) dari Supabase.</li>
-            <li>Fetch data XAU/USD + intermarket + COT + calendar.</li>
-            <li>Run 9-agent LLM debate.</li>
-            <li>Push hasil signal ke Supabase.</li>
-            <li>Vercel UI baca dari Supabase, tampilkan ke HP lo.</li>
-            <li>Cek queue Mira chatbot, proses kalau ada.</li>
-          </ol>
-          <p className="pt-2 text-amber-400">Daemon pakai port lokal 3031 — beda dari Mira WA worker (3030).</p>
+        {/* Architecture (collapsed by default) */}
+        <details className="bg-slate-800/40 rounded-2xl border border-slate-800 overflow-hidden">
+          <summary className="px-3.5 py-3 cursor-pointer text-xs font-semibold text-slate-300 hover:bg-slate-800/40 select-none flex items-center gap-2">
+            <span className="w-1 h-1 rounded-full bg-slate-500" />
+            Cara kerja daemon
+          </summary>
+          <div className="px-3.5 pb-3.5 pt-1 space-y-2 text-[11px] text-slate-500 leading-relaxed border-t border-slate-800/80">
+            <p className="text-slate-400">Tiap {s.refresh_interval_minutes} menit:</p>
+            <ol className="list-decimal pl-4 space-y-1">
+              <li>Pull config (provider key, model, agent settings) dari Supabase</li>
+              <li>Fetch data XAU/USD + intermarket + COT + calendar</li>
+              <li>Run 9-agent LLM debate (paralel per tier)</li>
+              <li>Push hasil signal ke Supabase</li>
+              <li>Vercel UI baca dari Supabase, tampilkan ke HP lo</li>
+              <li>Cek queue Mira chatbot tiap 5 detik, proses kalau ada</li>
+            </ol>
+            <p className="pt-1 text-amber-400">Port lokal 3031 - beda dari Mira WA worker (3030). Aman jalan barengan.</p>
+          </div>
+        </details>
+
+        {/* Tabs */}
+        <div className="grid grid-cols-3 gap-px bg-slate-800/80 rounded-xl overflow-hidden p-px">
+          {[
+            { id: 'install', label: 'Install' },
+            { id: 'update',  label: 'Update' },
+            { id: 'service', label: 'Auto-start' },
+          ].map(t => (
+            <button
+              key={t.id}
+              onClick={() => setActiveTab(t.id as 'install' | 'update' | 'service')}
+              className={`py-2 px-3 text-[11px] font-semibold transition-colors ${
+                activeTab === t.id
+                  ? 'bg-sky-900/40 text-sky-100 rounded-[10px]'
+                  : 'bg-slate-900/40 text-slate-400 hover:text-slate-200 rounded-[10px]'
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
         </div>
-      </details>
-
-      {/* Tabs */}
-      <div className="flex gap-1 bg-slate-900/50 rounded-xl p-1">
-        {[
-          { id: 'install', label: 'Install pertama' },
-          { id: 'update',  label: 'Update' },
-          { id: 'service', label: 'Auto-start' },
-        ].map(t => (
-          <button
-            key={t.id}
-            onClick={() => setActiveTab(t.id as 'install' | 'update' | 'service')}
-            className={`flex-1 py-2 px-3 text-[11px] font-semibold rounded-lg transition-all ${
-              activeTab === t.id ? 'bg-sky-700/50 text-sky-100' : 'text-slate-400'
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
 
       {activeTab === 'install' && (
         <>
@@ -195,6 +196,7 @@ export default function DaemonPage() {
           </Section>
         </>
       )}
+      </div>
     </main>
   )
 }
@@ -249,12 +251,12 @@ function Section({ title, sub, children }: {
   title: string; sub?: string; children: React.ReactNode
 }) {
   return (
-    <section className="bg-slate-800/60 border border-slate-700/50 rounded-2xl p-4 space-y-2">
-      <div>
-        <p className="text-sm font-bold text-slate-100">{title}</p>
-        {sub && <p className="text-[11px] text-slate-400 leading-relaxed">{sub}</p>}
+    <section>
+      <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-widest mb-1.5 px-2">{title}</p>
+      <div className="bg-slate-800/40 rounded-2xl border border-slate-800 px-3.5 py-3 space-y-2">
+        {sub && <p className="text-[11px] text-slate-500 leading-relaxed">{sub}</p>}
+        {children}
       </div>
-      {children}
     </section>
   )
 }
