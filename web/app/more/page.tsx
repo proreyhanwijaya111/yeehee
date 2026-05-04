@@ -2,11 +2,12 @@ import Link from 'next/link'
 import {
   Settings, Server, Brain, Cpu, Send, FlaskConical, BookOpen, Newspaper,
   ChevronRight, Github, ExternalLink,
+  type LucideIcon,
 } from 'lucide-react'
 
 type Item = {
   href: string
-  icon: React.ComponentType<{ size?: number; className?: string }>
+  icon: LucideIcon
   label: string
   desc?: string
   badge?: string
