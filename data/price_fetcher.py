@@ -10,6 +10,17 @@ import yfinance as yf
 
 from config.settings import DATA_CACHE, TICKERS
 
+# Fallback tickers per asset — kalau primary gagal (GC=F sering ke-block / delisted-state), coba alternatif.
+# Order matters: paling akurat dulu.
+FALLBACK_TICKERS = {
+    "xau":    ["GC=F", "XAUUSD=X", "GLD", "IAU"],     # gold futures -> spot fx -> ETF -> alt ETF
+    "dxy":    ["DX-Y.NYB", "DX=F", "UUP"],            # ICE DXY -> futures -> bullish dollar ETF
+    "us10y":  ["^TNX", "^IRX", "TLT"],                # 10Y yield -> 13W -> long bond ETF
+    "vix":    ["^VIX"],
+    "spx":    ["^GSPC", "SPY"],
+    "silver": ["SI=F", "XAGUSD=X", "SLV"],
+}
+
 CACHE_TTL = {
     "1m": 60,
     "5m": 300,
@@ -30,14 +41,16 @@ INTERVAL_MAP = {
     "1d": "1d",
 }
 
+# Yahoo Finance hard limits per interval (semakin kecil interval, semakin pendek max period)
+# Bekas "730d" untuk 1h sering hit rate-limit / empty response. Pakai 60d aja - lebih reliable.
 PERIOD_DEFAULT = {
-    "1m": "7d",
-    "5m": "60d",
-    "15m": "60d",
-    "30m": "60d",
-    "1h": "730d",
-    "4h": "730d",
-    "1d": "max",
+    "1m": "5d",
+    "5m": "30d",
+    "15m": "30d",
+    "30m": "30d",
+    "1h": "60d",      # was 730d (too greedy, sering empty)
+    "4h": "180d",     # was 730d
+    "1d": "5y",       # was max (max kadang trigger weird state)
 }
 
 
@@ -106,19 +119,43 @@ def fetch_ohlcv(
     return df
 
 
+def _fetch_with_fallback(asset_key: str, interval: str, period: Optional[str] = None) -> pd.DataFrame:
+    """Try primary ticker, fall back to alternatives if Yahoo returns empty / rate-limits."""
+    candidates = FALLBACK_TICKERS.get(asset_key, [])
+    if not candidates:
+        # Unknown key, try config TICKERS direct
+        sym = TICKERS.get(asset_key)
+        if sym:
+            return fetch_ohlcv(sym, interval, period)
+        raise RuntimeError(f"no ticker config for {asset_key}")
+
+    last_error: Exception | None = None
+    for i, sym in enumerate(candidates):
+        try:
+            df = fetch_ohlcv(sym, interval, period, use_cache=(i == 0))
+            if df is not None and not df.empty:
+                if i > 0:
+                    print(f"[fallback] {asset_key} pakai {sym} (primary {candidates[0]} gagal)")
+                return df
+        except Exception as e:
+            last_error = e
+            # don't print on first failure (often transient), only if all fail
+    raise RuntimeError(f"all tickers failed for {asset_key} ({candidates}): {last_error}")
+
+
 def fetch_xau(interval: str = "1h", period: Optional[str] = None) -> pd.DataFrame:
-    return fetch_ohlcv(TICKERS["xau"], interval, period)
+    return _fetch_with_fallback("xau", interval, period)
 
 
 def fetch_intermarket_bundle(interval: str = "1h", period: Optional[str] = None) -> dict[str, pd.DataFrame]:
-    """Bundle XAU + DXY + US10Y + VIX + SPX untuk feature engineering."""
+    """Bundle XAU + DXY + US10Y + VIX + SPX. Each ticker has its own fallback chain."""
     out = {}
     for key in ("xau", "dxy", "us10y", "vix", "spx", "silver"):
         try:
-            out[key] = fetch_ohlcv(TICKERS[key], interval, period)
+            out[key] = _fetch_with_fallback(key, interval, period)
         except Exception as e:
             out[key] = pd.DataFrame()
-            print(f"[warn] fetch {key} failed: {e}")
+            print(f"[warn] fetch {key} failed (all fallbacks exhausted): {e}")
     return out
 
 
