@@ -44,6 +44,22 @@ $ErrorActionPreference = 'Continue'
 $VerbosePreference     = 'SilentlyContinue'
 $ProgressPreference    = 'SilentlyContinue'
 
+# -- Network: force TLS 1.2+ (PS 5.1 default mau pakai TLS 1.0 yang sudah ditolak banyak server) --
+try {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
+} catch {
+    try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
+}
+
+# -- Console: switch ke UTF-8 supaya text Indonesia ga rusak --
+try { chcp 65001 > $null 2>&1 } catch {}
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+
+# -- Git: jangan prompt credential (repo public, ga butuh login) --
+$env:GIT_TERMINAL_PROMPT  = '0'
+$env:GIT_ASKPASS          = 'echo'
+$env:GCM_INTERACTIVE      = 'never'
+
 # ============================================================================
 # Helpers
 # ============================================================================
@@ -211,16 +227,28 @@ try {
     Write-Step "1/7 Cek Python 3.10+..."
     Refresh-Path
     if (-not (Test-RealPython)) {
-        Write-Warn "Python belum ada (atau cuma MS Store stub). Auto-install..."
-        Install-Tool "Python.Python.3.13" "Python 3.13"
-        Add-PythonToPath
-        Refresh-Path
-        if (-not (Test-RealPython)) {
-            throw "Python install selesai tapi belum ke-detect. Logout-login Windows lalu run script ulang. (winget kadang butuh re-login untuk PATH propagate.)"
+        Write-Warn "Python belum ada / cuma MS Store stub. Auto-install..."
+        # Try Python 3.13, fallback to 3.12 (some Windows versions don't have 3.13 in winget)
+        $pyInstalled = $false
+        foreach ($pyId in @("Python.Python.3.13","Python.Python.3.12","Python.Python.3.11")) {
+            try {
+                Install-Tool $pyId "Python ($pyId)"
+                Add-PythonToPath
+                Refresh-Path
+                if (Test-RealPython) {
+                    $pyInstalled = $true
+                    break
+                }
+            } catch {
+                Write-Warn "$pyId install gagal: $($_.Exception.Message). Coba versi lain..."
+            }
+        }
+        if (-not $pyInstalled) {
+            throw "Python install gagal di semua versi (3.13/3.12/3.11). Coba install manual dari python.org lalu run ulang script."
         }
     }
     $pyVer = (& python --version 2>&1) -join ''
-    Write-OK "Python OK: $pyVer"
+    Write-OK "Python: $pyVer"
 
     Write-Step "1.5/7 Cek Git..."
     if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
@@ -228,11 +256,11 @@ try {
         Install-Tool "Git.Git" "Git"
         Refresh-Path
         if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
-            throw "Git install selesai tapi belum ke-detect. Logout-login Windows lalu run ulang."
+            throw "Git install selesai tapi belum ke-detect PATH. Logout-login Windows lalu run script ulang. (winget kadang butuh re-login untuk PATH propagate.)"
         }
     }
     $gitVer = (& git --version 2>&1) -join ''
-    Write-OK "Git OK: $gitVer"
+    Write-OK "Git: $gitVer"
 
     # -- Step 2: Clone / pull repo (with retry) ---------------------------------
     Write-Step "2/7 Sync repo yeehee dari GitHub..."
@@ -257,17 +285,27 @@ try {
     }
     Write-OK "Repo synced"
 
-    # -- Step 3: venv -----------------------------------------------------------
+    # -- Step 3: venv (cleanup-on-fail + retry + ensurepip) --------------------
     Write-Step "3/7 Setup Python venv..."
-    if (-not (Test-Path "$InstallDir\\.venv\\Scripts\\python.exe")) {
-        Invoke-Native -Cmd "python" -Args @("-m","venv",".venv") -Label "python -m venv"
+    $Py = "$InstallDir\\.venv\\Scripts\\python.exe"
+    if (-not (Test-Path $Py)) {
+        try {
+            Invoke-Native -Cmd "python" -Args @("-m","venv",".venv") -Label "python -m venv" -Quiet
+        } catch {
+            Write-Warn "venv create gagal: $($_.Exception.Message). Cleanup + retry..."
+            if (Test-Path "$InstallDir\\.venv") {
+                Remove-Item -Recurse -Force "$InstallDir\\.venv" -ErrorAction SilentlyContinue
+            }
+            Invoke-Native -Cmd "python" -Args @("-m","venv",".venv","--clear") -Label "python -m venv (retry --clear)" -Quiet
+        }
     } else {
         Write-Host "  venv sudah ada, skip" -ForegroundColor DarkGray
     }
-    $Py = "$InstallDir\\.venv\\Scripts\\python.exe"
     if (-not (Test-Path $Py)) {
-        throw "venv create gagal - $Py tidak ada"
+        throw "venv create gagal - $Py ga ada. Coba: python --version (cek Python OK), python -m venv .venv (cek venv module)"
     }
+    # Make sure pip in venv works (kadang fresh venv ga punya pip working)
+    & $Py -m ensurepip --upgrade 2>&1 | Out-Null
     Write-OK "venv ready"
 
     # -- Step 4: deps (lean ~80 MB) --------------------------------------------
@@ -362,16 +400,32 @@ try {
         exit 0
     }
 
-    # -- Step 7b: foreground run ------------------------------------------------
+    # -- Step 7b: foreground run + post-launch verify --------------------------
     Write-Step "7/7 Starting daemon (foreground - Ctrl+C kalau mau stop)..." 'Green'
     Write-Host "  Logs: stdout window ini" -ForegroundColor DarkGray
-    Write-Host "  Buat auto-start saat boot Windows: ulangi installer dengan flag -InstallServiceOnly (perlu Admin)" -ForegroundColor DarkGray
+    Write-Host "  Auto-start saat boot Windows: ulangi installer + flag -InstallServiceOnly (perlu Admin)" -ForegroundColor DarkGray
     Write-Host ""
+    Write-Host "============================================================" -ForegroundColor Green
+    Write-Host "  yeehee daemon - SIAP" -ForegroundColor Green
+    Write-Host "  Cek status di HP: yeehee.vercel.app/more/settings" -ForegroundColor DarkGray
+    Write-Host "  Stop: Ctrl+C" -ForegroundColor DarkGray
     Write-Host "============================================================" -ForegroundColor Green
     Write-Host ""
 
-    # Start daemon (this blocks until Ctrl+C)
+    # Start daemon. Will block sampai Ctrl+C atau crash.
     & $Py -m daemon.main
+    $exitCode = $LASTEXITCODE
+
+    # Daemon ended
+    Write-Host ""
+    if ($exitCode -ne 0 -and $exitCode -ne $null) {
+        Write-Host "[yeehee] [WARN] Daemon exited code $exitCode (bukan Ctrl+C clean shutdown)" -ForegroundColor Yellow
+        Write-Host "  Restart: python -m daemon.main (di folder $InstallDir)" -ForegroundColor DarkGray
+        Write-Host "  Atau install Service biar auto-restart kalau crash:" -ForegroundColor DarkGray
+        Write-Host "  Set-ExecutionPolicy -Scope Process Bypass -Force; iwr https://yeehee.vercel.app/api/setup/script -OutFile `$env:TEMP\\yeehee-setup.ps1; & `$env:TEMP\\yeehee-setup.ps1 -SupabaseUrl '$SupabaseUrl' -SupabaseAnonKey '$SupabaseAnonKey' -InstallServiceOnly" -ForegroundColor DarkGray
+    } else {
+        Write-Host "[yeehee] Daemon stopped clean (Ctrl+C). Sampai jumpa." -ForegroundColor Cyan
+    }
 }
 catch {
     Write-Host ""
