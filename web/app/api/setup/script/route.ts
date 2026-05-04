@@ -185,20 +185,22 @@ try {
         throw "PowerShell terlalu lama. Butuh minimum 5.1, lo punya $($PSVersionTable.PSVersion). Update Windows ke 10/11."
     }
 
-    # -- Pre-flight: Supabase reachability (fail fast on bad creds) ------------
-    Write-Step "0/7 Validasi koneksi Supabase..."
+    # -- Pre-flight: Supabase reachability + schema check (fail fast) -----------
+    # Note: /rest/v1/ root returns 401 even with valid anon key (Supabase quirk).
+    # Use a real table query instead - confirms key valid AND schema applied.
+    Write-Step "0/7 Validasi koneksi Supabase + schema..."
     try {
-        $resp = Invoke-WebRequest -Uri "$SupabaseUrl/rest/v1/" -Headers @{
+        $resp = Invoke-WebRequest -Uri "$SupabaseUrl/rest/v1/app_settings?select=user_id&limit=1" -Headers @{
             "apikey"        = $SupabaseAnonKey
             "Authorization" = "Bearer $SupabaseAnonKey"
         } -UseBasicParsing -TimeoutSec 10 -ErrorAction Stop
-        Write-OK "Supabase reachable (HTTP $($resp.StatusCode))"
+        Write-OK "Supabase + schema OK (HTTP $($resp.StatusCode))"
     } catch {
         $statusCode = if ($_.Exception.Response) { $_.Exception.Response.StatusCode.value__ } else { 0 }
         if ($statusCode -eq 401 -or $statusCode -eq 403) {
-            throw "Supabase auth gagal (HTTP $statusCode). Cek SUPABASE_ANON_KEY di Vercel env."
+            throw "Supabase auth gagal (HTTP $statusCode). Cek SUPABASE_ANON_KEY di Vercel env Settings -> Environment Variables."
         } elseif ($statusCode -eq 404) {
-            Write-Warn "Supabase root /rest/v1/ HTTP 404 - biasanya normal. Lanjut..."
+            throw "Tabel app_settings tidak ada di Supabase. Project belum di-init / URL salah. URL: $SupabaseUrl"
         } else {
             Write-Warn "Supabase ping gagal: $($_.Exception.Message). Lanjut anyway..."
         }
