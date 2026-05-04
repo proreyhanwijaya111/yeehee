@@ -29,9 +29,17 @@ export default function DaemonPage() {
     </main>
   )
 
-  const installScript = buildInstallScript(SUPABASE_URL, SUPABASE_KEY, showSecrets)
+  // Copy ALWAYS uses the real key — masking only affects what's rendered on screen.
+  // (Previous bug: masking applied to copy too, so users pasted bullet chars and
+  //  got Supabase HTTP 401 auth fail.)
+  const installScriptCopy    = buildInstallScript(SUPABASE_URL, SUPABASE_KEY, true)
+  const installScriptDisplay = buildInstallScript(SUPABASE_URL, SUPABASE_KEY, showSecrets)
   const updateScript  = buildUpdateScript()
-  const serviceScript = buildServiceScript(SUPABASE_URL, SUPABASE_KEY)
+  const serviceScriptCopy    = buildServiceScript(SUPABASE_URL, SUPABASE_KEY)
+  const serviceScriptDisplay = buildServiceScript(
+    SUPABASE_URL,
+    showSecrets ? SUPABASE_KEY : (SUPABASE_KEY ? SUPABASE_KEY.slice(0, 20) + '••••••••' : SUPABASE_KEY),
+  )
 
   return (
     <main className="max-w-lg mx-auto px-4 pt-4 pb-2 space-y-4 animate-fade-in">
@@ -121,11 +129,11 @@ export default function DaemonPage() {
                 className="flex items-center gap-1 px-2 py-1 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-[10px] text-slate-300"
               >
                 {showSecrets ? <EyeOff size={11} /> : <Eye size={11} />}
-                {showSecrets ? 'sembunyikan' : 'tampilkan'} kredensial
+                {showSecrets ? 'sembunyikan' : 'tampilkan'} kredensial di tampilan
               </button>
-              <p className="text-[10px] text-slate-500">Saat copy tetap include kredensial.</p>
+              <p className="text-[10px] text-emerald-400">✓ Copy selalu pake key asli</p>
             </div>
-            <CodeBlock code={installScript} multiline />
+            <CodeBlock displayCode={installScriptDisplay} copyCode={installScriptCopy} multiline />
           </Section>
 
           <Section
@@ -173,7 +181,7 @@ export default function DaemonPage() {
             title="Auto-start saat boot Windows (NSSM)"
             sub="Pakai NSSM untuk register daemon sebagai Windows service — auto-start saat PC nyala."
           >
-            <CodeBlock code={serviceScript} multiline />
+            <CodeBlock displayCode={serviceScriptDisplay} copyCode={serviceScriptCopy} multiline />
             <p className="text-[10px] text-slate-500 mt-2">
               Cara kerja: NSSM bikin Windows Service yang panggil `python daemon.py` saat boot. Service tetap jalan meski tidak login.
             </p>
@@ -251,10 +259,17 @@ function Section({ title, sub, children }: {
   )
 }
 
-function CodeBlock({ code, multiline }: { code: string; multiline?: boolean }) {
+function CodeBlock({ code, displayCode, copyCode, multiline }: {
+  code?: string
+  displayCode?: string
+  copyCode?: string
+  multiline?: boolean
+}) {
   const [copied, setCopied] = useState(false)
+  const shown   = displayCode ?? code ?? ''
+  const onCopy  = copyCode    ?? code ?? ''
   const handleCopy = async () => {
-    await navigator.clipboard.writeText(code)
+    await navigator.clipboard.writeText(onCopy)
     setCopied(true)
     setTimeout(() => setCopied(false), 1500)
   }
@@ -263,12 +278,12 @@ function CodeBlock({ code, multiline }: { code: string; multiline?: boolean }) {
       <pre className={`bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-[11px] text-slate-200 font-mono overflow-x-auto ${
         multiline ? 'whitespace-pre' : 'whitespace-nowrap'
       } leading-relaxed`}>
-        {code}
+        {shown}
       </pre>
       <button
         onClick={handleCopy}
         className="absolute top-1.5 right-1.5 p-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-slate-400 hover:text-slate-100 transition-colors"
-        title="Copy"
+        title="Copy script asli"
       >
         {copied ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
       </button>
