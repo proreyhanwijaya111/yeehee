@@ -1,5 +1,5 @@
 import Link from 'next/link'
-import { FlaskConical, Settings, BookOpen, Newspaper } from 'lucide-react'
+import { FlaskConical, Settings, BookOpen, Newspaper, Server } from 'lucide-react'
 
 const MENU = [
   {
@@ -21,10 +21,18 @@ const MENU = [
   {
     href:  '/more/settings',
     icon:  Settings,
-    label: 'Setup Telegram',
-    desc:  'Terima sinyal di HP via Telegram bot',
-    color: 'text-green-400',
-    bg:    'bg-green-950/40 border-green-700/40',
+    label: 'Pengaturan',
+    desc:  'LLM, agent, daemon, telegram — semua di sini',
+    color: 'text-emerald-400',
+    bg:    'bg-emerald-950/40 border-emerald-700/40',
+  },
+  {
+    href:  '/more/settings/daemon',
+    icon:  Server,
+    label: 'Daemon PC Rumah',
+    desc:  'Generate script worker untuk PC lo',
+    color: 'text-pink-400',
+    bg:    'bg-pink-950/40 border-pink-700/40',
   },
   {
     href:  '/more/glossary',

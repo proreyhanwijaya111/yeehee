@@ -1,0 +1,246 @@
+/**
+ * Settings data layer — talks directly to Supabase.
+ *
+ * All functions are no-op safe: if Supabase isn't configured, they return
+ * sensible defaults / null instead of throwing.
+ */
+import { supabase } from './supabase'
+
+export type AppSettings = {
+  user_id: string
+  refresh_interval_minutes: number
+  default_llm_provider: string
+  default_llm_model: string
+  use_per_agent_models: boolean
+  use_llm_agents: boolean
+  timezone: string
+  daemon_active: boolean
+  daemon_last_seen: string | null
+  enable_news_blackout: boolean
+  enable_mira_worker: boolean
+  timeframe_focus: 'all' | 'scalping' | 'intraday' | 'swing'
+}
+
+export type ProviderKey = {
+  provider: string
+  api_key: string | null
+  base_url: string | null
+  enabled: boolean
+  last_validated_at: string | null
+  last_error: string | null
+}
+
+export type AgentConfig = {
+  agent_name: string
+  enabled: boolean
+  llm_provider: string | null
+  llm_model: string | null
+  temperature: number
+  max_tokens: number
+  weight: number
+  timeframes: string[]
+  custom_prompt: string | null
+}
+
+export type DaemonHeartbeat = {
+  hostname: string | null
+  ip_address: string | null
+  version: string | null
+  last_signal_at: string | null
+  last_mira_job_at: string | null
+  cpu_percent: number | null
+  ram_percent: number | null
+  error: string | null
+  updated_at: string
+}
+
+export const PROVIDER_LABELS: Record<string, string> = {
+  openrouter: 'OpenRouter',
+  anthropic:  'Anthropic Claude',
+  openai:     'OpenAI',
+  groq:       'Groq Cloud',
+  gemini:     'Google Gemini',
+  ollama:     'Ollama (local)',
+  lmstudio:   'LM Studio (local)',
+}
+
+export const PROVIDER_LIST = ['openrouter', 'anthropic', 'openai', 'groq', 'gemini', 'ollama', 'lmstudio']
+
+export const AGENT_NAMES = [
+  'htf_bias',
+  'session_phase',
+  'ltf_technical',
+  'liquidity_smc',
+  'order_flow',
+  'news_proximity',
+  'volatility',
+  'devils_advocate',
+  'synthesizer',
+] as const
+export type AgentName = typeof AGENT_NAMES[number]
+
+export const AGENT_LABELS: Record<AgentName, string> = {
+  htf_bias:        'HTF Bias',
+  session_phase:   'Session Phase',
+  ltf_technical:   'LTF Technical',
+  liquidity_smc:   'Liquidity / SMC',
+  order_flow:      'Order Flow',
+  news_proximity:  'News Proximity',
+  volatility:      'Volatility',
+  devils_advocate: "Devil's Advocate",
+  synthesizer:     'Synthesizer',
+}
+
+export const AGENT_DESCRIPTIONS: Record<AgentName, string> = {
+  htf_bias:        'Read H1/H4 trend, set directional bias filter.',
+  session_phase:   'Asian/London/NY session — favourable for entry?',
+  ltf_technical:   'M5/M15 trigger aligned with HTF bias.',
+  liquidity_smc:   'Liquidity sweep, FVG, Order Block, Breaker.',
+  order_flow:      'COT positioning, volume spikes, stop hunts.',
+  news_proximity:  'Block trade if high-impact news imminent.',
+  volatility:      'ATR/spread check — too high or too low.',
+  devils_advocate: 'Argue against consensus, find risks, possible veto.',
+  synthesizer:     'Combine all verdicts into final BELI/JUAL/TUNGGU.',
+}
+
+const USER_ID = 'default'  // single-user for now
+
+// ─── App Settings ─────────────────────────────────────────────────────────────
+
+const DEFAULT_SETTINGS: AppSettings = {
+  user_id: USER_ID,
+  refresh_interval_minutes: 5,
+  default_llm_provider: 'openrouter',
+  default_llm_model:    'openai/gpt-oss-20b:free',
+  use_per_agent_models: false,
+  use_llm_agents:       true,
+  timezone:             'Asia/Jakarta',
+  daemon_active:        true,
+  daemon_last_seen:     null,
+  enable_news_blackout: true,
+  enable_mira_worker:   true,
+  timeframe_focus:      'all',
+}
+
+export async function getAppSettings(): Promise<AppSettings> {
+  if (!supabase) return DEFAULT_SETTINGS
+  const { data, error } = await supabase
+    .from('app_settings')
+    .select('*')
+    .eq('user_id', USER_ID)
+    .maybeSingle()
+  if (error || !data) return DEFAULT_SETTINGS
+  return { ...DEFAULT_SETTINGS, ...data }
+}
+
+export async function updateAppSettings(patch: Partial<AppSettings>): Promise<boolean> {
+  if (!supabase) return false
+  const { error } = await supabase
+    .from('app_settings')
+    .upsert({ user_id: USER_ID, ...patch, updated_at: new Date().toISOString() }, { onConflict: 'user_id' })
+  return !error
+}
+
+// ─── Provider Keys ────────────────────────────────────────────────────────────
+
+export async function getProviderKeys(): Promise<ProviderKey[]> {
+  if (!supabase) return []
+  const { data, error } = await supabase
+    .from('provider_keys')
+    .select('*')
+    .eq('user_id', USER_ID)
+  if (error || !data) return []
+  return data as ProviderKey[]
+}
+
+export async function upsertProviderKey(provider: string, api_key: string, base_url?: string): Promise<boolean> {
+  if (!supabase) return false
+  const { error } = await supabase
+    .from('provider_keys')
+    .upsert({
+      user_id: USER_ID,
+      provider,
+      api_key,
+      base_url: base_url ?? null,
+      enabled: true,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'user_id,provider' })
+  return !error
+}
+
+export async function setProviderEnabled(provider: string, enabled: boolean): Promise<boolean> {
+  if (!supabase) return false
+  const { error } = await supabase
+    .from('provider_keys')
+    .update({ enabled, updated_at: new Date().toISOString() })
+    .eq('user_id', USER_ID)
+    .eq('provider', provider)
+  return !error
+}
+
+export async function deleteProviderKey(provider: string): Promise<boolean> {
+  if (!supabase) return false
+  const { error } = await supabase
+    .from('provider_keys')
+    .delete()
+    .eq('user_id', USER_ID)
+    .eq('provider', provider)
+  return !error
+}
+
+export async function recordProviderValidation(provider: string, ok: boolean, error_msg?: string): Promise<void> {
+  if (!supabase) return
+  await supabase
+    .from('provider_keys')
+    .update({
+      last_validated_at: new Date().toISOString(),
+      last_error: ok ? null : (error_msg ?? 'unknown error'),
+    })
+    .eq('user_id', USER_ID)
+    .eq('provider', provider)
+}
+
+// ─── Agent Configs ────────────────────────────────────────────────────────────
+
+export async function getAgentConfigs(): Promise<AgentConfig[]> {
+  if (!supabase) return []
+  const { data, error } = await supabase
+    .from('agent_configs')
+    .select('*')
+    .eq('user_id', USER_ID)
+    .order('agent_name')
+  if (error || !data) return []
+  return data as AgentConfig[]
+}
+
+export async function updateAgentConfig(agent_name: string, patch: Partial<AgentConfig>): Promise<boolean> {
+  if (!supabase) return false
+  const { error } = await supabase
+    .from('agent_configs')
+    .upsert({
+      user_id: USER_ID,
+      agent_name,
+      ...patch,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'user_id,agent_name' })
+  return !error
+}
+
+// ─── Daemon Heartbeat ─────────────────────────────────────────────────────────
+
+export async function getDaemonHeartbeat(): Promise<DaemonHeartbeat | null> {
+  if (!supabase) return null
+  const { data, error } = await supabase
+    .from('daemon_heartbeat')
+    .select('*')
+    .eq('user_id', USER_ID)
+    .maybeSingle()
+  if (error || !data) return null
+  return data as DaemonHeartbeat
+}
+
+export function isDaemonOnline(hb: DaemonHeartbeat | null, withinMinutes = 5): boolean {
+  if (!hb || !hb.updated_at) return false
+  const last = new Date(hb.updated_at).getTime()
+  return Date.now() - last < withinMinutes * 60_000
+}
