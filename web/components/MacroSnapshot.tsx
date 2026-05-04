@@ -1,4 +1,4 @@
-import type { Intermarket, COT } from '@/lib/types'
+import type { Intermarket, COT, IntermarketComponent } from '@/lib/types'
 import { macroBiasLabel, cotLabel } from '@/lib/utils'
 
 interface Props {
@@ -6,10 +6,23 @@ interface Props {
   cot:         COT
 }
 
+// Extract score number safely. Each component is {note, score, value} OR null OR undefined.
+// Returns 0 kalau missing/invalid biar UI ga crash.
+function score(c: IntermarketComponent | undefined | null): number {
+  if (!c || typeof c !== 'object') return 0
+  const v = c.score
+  return typeof v === 'number' && Number.isFinite(v) ? v : 0
+}
+
 export default function MacroSnapshot({ intermarket, cot }: Props) {
-  const { score, components: c } = intermarket
-  const bias = macroBiasLabel(score)
+  const overallScore = typeof intermarket?.score === 'number' ? intermarket.score : 0
+  const c   = intermarket?.components ?? {}
+  const bias = macroBiasLabel(overallScore)
   const cotInfo = cotLabel(cot?.z ?? null)
+
+  const dxy   = score(c.dxy)
+  const us10y = score(c.us10y)
+  const vix   = score(c.vix)
 
   const items = [
     {
@@ -20,21 +33,21 @@ export default function MacroSnapshot({ intermarket, cot }: Props) {
     },
     {
       label: 'DXY',
-      value: (c.dxy >= 0 ? '+' : '') + c.dxy.toFixed(2),
-      color: c.dxy < 0 ? '#22c55e' : '#ef4444',
-      tip:   'DXY naik = USD kuat = emas turun',
+      value: (dxy >= 0 ? '+' : '') + dxy.toFixed(2),
+      color: dxy < 0 ? '#22c55e' : '#ef4444',
+      tip:   c.dxy?.note || 'DXY naik = USD kuat = emas turun',
     },
     {
       label: 'US10Y',
-      value: (c.us10y >= 0 ? '+' : '') + c.us10y.toFixed(2),
-      color: c.us10y < 0 ? '#22c55e' : '#ef4444',
-      tip:   'Yield naik = emas turun (korelasi negatif)',
+      value: (us10y >= 0 ? '+' : '') + us10y.toFixed(2),
+      color: us10y < 0 ? '#22c55e' : '#ef4444',
+      tip:   c.us10y?.note || 'Yield naik = emas turun',
     },
     {
       label: 'VIX',
-      value: (c.vix >= 0 ? '+' : '') + c.vix.toFixed(2),
-      color: c.vix > 0 ? '#22c55e' : '#94a3b8',
-      tip:   'VIX tinggi = pasar takut = emas safe haven',
+      value: (vix >= 0 ? '+' : '') + vix.toFixed(2),
+      color: vix > 0 ? '#22c55e' : '#94a3b8',
+      tip:   c.vix?.note || 'VIX tinggi = pasar takut = emas safe haven',
     },
     {
       label: 'COT',
@@ -45,19 +58,19 @@ export default function MacroSnapshot({ intermarket, cot }: Props) {
   ]
 
   return (
-    <div className="bg-slate-800/60 rounded-2xl p-4 border border-slate-700/50 card-shadow">
-      <p className="text-xs text-slate-400 font-semibold uppercase tracking-wider mb-3">
-        📊 Kondisi Pasar
+    <div className="bg-slate-800/40 rounded-2xl border border-slate-800 p-4">
+      <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-widest mb-2">
+        Kondisi pasar
       </p>
       <div className="grid grid-cols-2 gap-2">
         {items.map(({ label, value, color, tip }) => (
           <div
             key={label}
             title={tip}
-            className="bg-slate-700/30 rounded-xl px-3 py-2"
+            className="bg-slate-900/40 rounded-xl px-3 py-2 border border-slate-800/50"
           >
-            <p className="text-[10px] text-slate-400 uppercase tracking-wide">{label}</p>
-            <p className="text-sm font-bold mt-0.5 truncate" style={{ color }}>
+            <p className="text-[10px] text-slate-500 uppercase tracking-wide">{label}</p>
+            <p className="text-sm font-bold mt-0.5 truncate tabular-nums" style={{ color }}>
               {value}
             </p>
           </div>

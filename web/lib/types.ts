@@ -40,23 +40,33 @@ export interface Debate {
   risks:           string[]
 }
 
+// Each intermarket component punya note + score (-1..+1) + value (raw market price)
+// Daemon push pakai struktur ini dari features/intermarket.py
+export interface IntermarketComponent {
+  note?:  string
+  score?: number
+  value?: number
+}
+
 export interface IntermarketComponents {
-  dxy:         number
-  us10y:       number
-  vix:         number
-  spx:         number
-  gold_silver: number
+  dxy?:         IntermarketComponent
+  us10y?:       IntermarketComponent
+  vix?:         IntermarketComponent
+  spx?:         IntermarketComponent
+  gold_silver?: IntermarketComponent
 }
 
 export interface Intermarket {
-  score:      number   // -1..+1
+  score:      number   // -1..+1 weighted bias
+  note?:      string
   components: IntermarketComponents
 }
 
 export interface COT {
-  z:          number | null
-  net_long:   number | null
-  signal:     string | null
+  z:        number | null
+  note?:    string
+  signal?:  string | number | null   // daemon kadang push number (0/1/-1) kadang string
+  net_long?: number | null
 }
 
 export interface CalendarEvent {

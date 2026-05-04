@@ -36,19 +36,31 @@ git pull origin main    # sync latest
 ### 3. Sebelum claim "done"
 **SOP wajib semua step ini sebelum bilang sukses:**
 
+> **NEW (post 2026-05-04 17:37):** GitHub `proreyhanwijaya111/yeehee` sudah ke-connect ke Vercel.
+> Setiap `git push origin main` = AUTO-DEPLOY ke yeehee.vercel.app.
+> **TIDAK PERLU manual `vercel deploy --prod --yes` lagi.** Just push, Vercel handles.
+
 ```bash
-# Step 1: Build
+# Step 1: Build LOCAL (catch errors before pushing)
 cd web
 npm run build           # exit 0 + tampil semua route
                         # cek "Compiled successfully" + "Generating static pages"
+                        # KALAU GAGAL: jangan push, fix dulu
 
-# Step 2: Deploy
-vercel deploy --prod --yes 2>&1 | tail -5
-                        # cari "Production: https://..." (NOT just URL, must show)
+# Step 2: Git commit + push (Vercel auto-deploys after push)
+cd ..
+git add <specific-files>      # bukan -A blindly (jangan include .env)
+git status                    # verify staged correct
+git commit -m "..."
+git push origin main
+                        # ↓ Vercel auto-trigger build + deploy ~1-2 menit
 
-# Step 3: VERIFY deploy actually Ready (bukan ● Error!)
+# Step 3: TUNGGU 60-90 detik, cek Vercel auto-deploy succeeded
+cd web
+sleep 60
 vercel ls yeehee | head -3
                         # latest deploy MUST show "● Ready", bukan "● Error"
+                        # umur harus < 2 menit (kalau lama = belum trigger)
 
 # Step 4: HTTP test pages kritis
 for path in "/" "/signals" "/calculator" "/analysis" "/news" "/more" "/more/settings" "/more/settings/llm" "/more/settings/agents" "/more/settings/daemon" "/api/setup/script"; do
@@ -60,12 +72,11 @@ done
 # Step 5: Setup script content check (kalau update installer)
 curl -s https://yeehee.vercel.app/api/setup/script | head -1 | xxd | head -1
                         # MUST start dengan EF BB BF (UTF-8 BOM)
+```
 
-# Step 6: Git commit + push
-git add <specific-files>      # bukan -A blindly (jangan include .env)
-git status                    # verify staged correct
-git commit -m "..."
-git push origin main
+**Manual override** kalau perlu force re-deploy tanpa commit (rare):
+```bash
+cd web && vercel deploy --prod --yes
 ```
 
 ### 4. SAAT ADA ERROR
