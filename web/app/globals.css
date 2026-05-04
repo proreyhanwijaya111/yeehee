@@ -1,0 +1,67 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg:       #0f172a;
+  --surface:  #1e293b;
+  --border:   #334155;
+  --text:     #f1f5f9;
+  --muted:    #94a3b8;
+  --buy:      #16a34a;
+  --sell:     #dc2626;
+  --wait:     #475569;
+}
+
+* {
+  -webkit-tap-highlight-color: transparent;
+  -webkit-font-smoothing: antialiased;
+}
+
+html, body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  min-height: 100dvh;
+  overscroll-behavior: none;
+}
+
+/* Safe area insets for iPhone notch */
+.safe-bottom { padding-bottom: env(safe-area-inset-bottom, 0px); }
+.safe-top    { padding-top:    env(safe-area-inset-top, 0px); }
+
+/* Scrollbar minimal */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #334155; border-radius: 2px; }
+
+/* Progress bar animations */
+@keyframes progress-fill {
+  from { width: 0%; }
+  to   { width: var(--target-width); }
+}
+
+.progress-bar { animation: progress-fill 0.6s ease-out forwards; }
+
+/* Hero gradient animations */
+@keyframes hero-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.92; }
+}
+.hero-live { animation: hero-pulse 4s ease-in-out infinite; }
+
+/* Bottom nav glass effect */
+.nav-glass {
+  background: rgba(15, 23, 42, 0.92);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-top: 1px solid rgba(51, 65, 85, 0.8);
+}
+
+/* Card shadows */
+.card-shadow { box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3); }
+.card-shadow-lg { box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4); }
+
+/* Touch feedback */
+.touch-action { touch-action: manipulation; }
+.active\:scale-98:active { transform: scale(0.98); }

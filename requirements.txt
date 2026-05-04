@@ -1,0 +1,26 @@
+# Data
+yfinance>=0.2.40
+pandas>=2.1.0
+numpy>=1.26.0
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+
+# Stats / scientific
+scipy>=1.11.0
+statsmodels>=0.14.0
+
+# AI agent (optional — only used if ANTHROPIC_API_KEY present)
+anthropic>=0.39.0
+
+# Dashboard
+streamlit>=1.32.0
+plotly>=5.20.0
+
+# Config / utils
+python-dotenv>=1.0.0
+pydantic>=2.6.0
+tenacity>=8.2.0
+
+# Notification (Telegram bot — [job-queue] extra enables auto-push scheduler)
+python-telegram-bot[job-queue]>=21.0
