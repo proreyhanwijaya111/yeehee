@@ -421,8 +421,7 @@ try {
     if ($exitCode -ne 0 -and $exitCode -ne $null) {
         Write-Host "[yeehee] [WARN] Daemon exited code $exitCode (bukan Ctrl+C clean shutdown)" -ForegroundColor Yellow
         Write-Host "  Restart: python -m daemon.main (di folder $InstallDir)" -ForegroundColor DarkGray
-        Write-Host "  Atau install Service biar auto-restart kalau crash:" -ForegroundColor DarkGray
-        Write-Host "  Set-ExecutionPolicy -Scope Process Bypass -Force; iwr https://yeehee.vercel.app/api/setup/script -OutFile `$env:TEMP\\yeehee-setup.ps1; & `$env:TEMP\\yeehee-setup.ps1 -SupabaseUrl '$SupabaseUrl' -SupabaseAnonKey '$SupabaseAnonKey' -InstallServiceOnly" -ForegroundColor DarkGray
+        Write-Host "  Atau install Service biar auto-restart kalau crash. Run installer ulang dengan flag -InstallServiceOnly (perlu Admin)." -ForegroundColor DarkGray
     } else {
         Write-Host "[yeehee] Daemon stopped clean (Ctrl+C). Sampai jumpa." -ForegroundColor Cyan
     }
