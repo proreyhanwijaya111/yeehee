@@ -16,8 +16,8 @@ const TIMEFRAMES = ['scalping', 'intraday', 'swing'] as const
 
 const TIERS = [
   { tier: '1 - Bias',     agents: ['htf_bias', 'session_phase'] },
-  { tier: '2 - Trigger',  agents: ['ltf_technical', 'liquidity_smc', 'order_flow'] },
-  { tier: '3 - Risk',     agents: ['news_proximity', 'volatility'] },
+  { tier: '2 - Trigger',  agents: ['ltf_technical', 'liquidity_smc', 'order_flow', 'pattern_recognition', 'volume_profile'] },
+  { tier: '3 - Risk',     agents: ['news_proximity', 'volatility', 'backtest_memory'] },
   { tier: '4 - Meta',     agents: ['devils_advocate'] },
   { tier: 'Final',        agents: ['synthesizer'] },
 ]

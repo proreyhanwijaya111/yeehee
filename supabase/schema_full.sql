@@ -172,15 +172,18 @@ insert into app_settings (user_id) values ('default')
 on conflict (user_id) do nothing;
 
 insert into agent_configs (user_id, agent_name, weight, timeframes) values
-  ('default', 'htf_bias',          1.0, array['scalping','intraday','swing']),
-  ('default', 'session_phase',     0.8, array['scalping','intraday']),
-  ('default', 'ltf_technical',     1.0, array['scalping','intraday','swing']),
-  ('default', 'liquidity_smc',     1.2, array['scalping','intraday']),
-  ('default', 'order_flow',        1.0, array['intraday','swing']),
-  ('default', 'news_proximity',    1.5, array['scalping','intraday','swing']),
-  ('default', 'volatility',        0.7, array['scalping','intraday','swing']),
-  ('default', 'devils_advocate',   1.5, array['scalping','intraday','swing']),
-  ('default', 'synthesizer',       1.0, array['scalping','intraday','swing'])
+  ('default', 'htf_bias',            1.0, array['scalping','intraday','swing']),
+  ('default', 'session_phase',       0.8, array['scalping','intraday']),
+  ('default', 'ltf_technical',       1.0, array['scalping','intraday','swing']),
+  ('default', 'liquidity_smc',       1.2, array['scalping','intraday']),
+  ('default', 'order_flow',          1.0, array['intraday','swing']),
+  ('default', 'pattern_recognition', 0.9, array['scalping','intraday','swing']),
+  ('default', 'volume_profile',      1.0, array['scalping','intraday','swing']),
+  ('default', 'news_proximity',      1.5, array['scalping','intraday','swing']),
+  ('default', 'volatility',          0.7, array['scalping','intraday','swing']),
+  ('default', 'backtest_memory',     1.1, array['scalping','intraday','swing']),
+  ('default', 'devils_advocate',     1.5, array['scalping','intraday','swing']),
+  ('default', 'synthesizer',         1.0, array['scalping','intraday','swing'])
 on conflict (user_id, agent_name) do nothing;
 
 -- =====================================================================
