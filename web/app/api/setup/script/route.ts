@@ -34,6 +34,7 @@ param(
     [Parameter(Mandatory=$false)] [string] $UserId      = "default",
     [Parameter(Mandatory=$false)] [string] $Port        = "${DEFAULT_PORT}",
     [Parameter(Mandatory=$false)] [string] $InstallDir  = "$HOME\\${DEFAULT_DIR}",
+    [Parameter(Mandatory=$false)] [string] $PipMirror   = "https://pypi.tuna.tsinghua.edu.cn/simple",  # default Tsinghua (cepat dari Asia/Indonesia)
     [Parameter(Mandatory=$false)] [switch] $InstallServiceOnly,
     [Parameter(Mandatory=$false)] [switch] $StopOnly
 )
@@ -270,12 +271,20 @@ try {
     Write-OK "venv ready"
 
     # -- Step 4: deps (lean ~80 MB) --------------------------------------------
-    Write-Step "4/7 Install Python dependencies (~80 MB, 2-5 menit di koneksi normal)..."
+    Write-Step "4/7 Install Python dependencies (~80 MB)..."
+    Write-Host "  Mirror: $PipMirror" -ForegroundColor DarkGray
     Write-Host "  Tip: koneksi lambat? Biarkan retry jalan - pip resume dari posisi terakhir." -ForegroundColor DarkGray
-    # --timeout 180   : socket timeout 3 min per chunk (default 15s, putus di koneksi lambat)
-    # --retries 15    : pip retry per chunk timeout (default 5)
-    # --prefer-binary : skip source builds, pakai wheel
-    $pipFlags = @("--timeout","180","--retries","15","--prefer-binary","--no-cache-dir","--disable-pip-version-check")
+    # Tsinghua mirror default - jauh lebih cepat dari pypi.org untuk Asia/Indonesia (sering 10x)
+    # Override dengan -PipMirror "https://pypi.org/simple" kalau mau pakai default upstream.
+    $pipFlags = @(
+        "--index-url",$PipMirror,
+        "--extra-index-url","https://pypi.org/simple",
+        "--timeout","300",
+        "--retries","20",
+        "--prefer-binary",
+        "--no-cache-dir",
+        "--disable-pip-version-check"
+    )
     Invoke-Native -Cmd $Py -Args (@("-m","pip","install","--upgrade","pip") + $pipFlags) -Label "pip upgrade" -Quiet -Retries 1
     Invoke-Native -Cmd $Py -Args (@("-m","pip","install","-r","$InstallDir\\daemon\\requirements.txt") + $pipFlags) -Label "pip install daemon deps" -Retries 3
     Write-OK "deps installed"
