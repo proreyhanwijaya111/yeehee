@@ -34,10 +34,17 @@ param(
     [Parameter(Mandatory=$false)] [string] $UserId      = "default",
     [Parameter(Mandatory=$false)] [string] $Port        = "${DEFAULT_PORT}",
     [Parameter(Mandatory=$false)] [string] $InstallDir  = "$HOME\\${DEFAULT_DIR}",
-    [Parameter(Mandatory=$false)] [string] $PipMirror   = "https://pypi.tuna.tsinghua.edu.cn/simple",  # default Tsinghua (cepat dari Asia/Indonesia)
-    [Parameter(Mandatory=$false)] [switch] $InstallServiceOnly,
+    [Parameter(Mandatory=$false)] [string] $PipMirror   = "https://pypi.tuna.tsinghua.edu.cn/simple",
+    # Mode flags - DEFAULT now = install as Service (production-ready 24/7).
+    # Pakai -Foreground kalau mau debug/testing dengan log live di window.
+    [Parameter(Mandatory=$false)] [switch] $Foreground,
+    [Parameter(Mandatory=$false)] [switch] $InstallServiceOnly,  # alias backwards-compat
     [Parameter(Mandatory=$false)] [switch] $StopOnly
 )
+
+# Determine final mode: Service (default) vs Foreground (testing).
+# -InstallServiceOnly is now redundant (Service is default) but kept for backwards compat.
+$IsServiceMode = -not $Foreground.IsPresent
 
 # Use 'Continue' to avoid PS 5.1 native-cmd stderr quirk. We check exit codes manually.
 $ErrorActionPreference = 'Continue'
@@ -190,12 +197,32 @@ if ($StopOnly) {
 # ============================================================================
 
 try {
+    $modeLabel = if ($IsServiceMode) { "Service (auto-start 24/7)" } else { "Foreground (debug)" }
+    $modeColor = if ($IsServiceMode) { "Green" } else { "Yellow" }
     Write-Step "yeehee Signal Daemon installer" 'Green'
+    Write-Host "  Mode:      $modeLabel" -ForegroundColor $modeColor
     Write-Host "  Folder:    $InstallDir"        -ForegroundColor DarkGray
     Write-Host "  Port:      $Port"               -ForegroundColor DarkGray
     Write-Host "  Supabase:  $SupabaseUrl"        -ForegroundColor DarkGray
     Write-Host "  Service:   ${SERVICE_NAME}"     -ForegroundColor DarkGray
     Write-Host "  PS Version: $($PSVersionTable.PSVersion)" -ForegroundColor DarkGray
+
+    # -- Pre-flight: Admin check (Service mode butuh Admin untuk NSSM) --------
+    if ($IsServiceMode) {
+        $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+        if (-not $isAdmin) {
+            Write-Host ""
+            Write-Host "[yeehee] Service mode butuh Administrator untuk register Windows Service." -ForegroundColor Yellow
+            Write-Host ""
+            Write-Host "Pilihan lo:" -ForegroundColor Yellow
+            Write-Host "  1. Tutup window ini, klik kanan PowerShell -> Run as Administrator, paste lagi." -ForegroundColor White
+            Write-Host "  2. Atau pakai -Foreground flag untuk testing (no auto-start, mati saat tutup window)." -ForegroundColor White
+            Write-Host ""
+            Write-Host "Recommended: pilih 1 buat production 24/7." -ForegroundColor Cyan
+            Write-Host ""
+            throw "Bukan Administrator. Re-run as Admin atau pakai -Foreground."
+        }
+    }
 
     # -- Pre-flight: PowerShell version -----------------------------------------
     if ($PSVersionTable.PSVersion.Major -lt 5) {
@@ -345,8 +372,8 @@ try {
     Invoke-Native -Cmd $Py -Args $smokeArgs -Label "smoke test"
     Write-OK "imports valid"
 
-    # -- Step 7a: install service mode ------------------------------------------
-    if ($InstallServiceOnly) {
+    # -- Step 7a: install service mode (DEFAULT) -------------------------------
+    if ($IsServiceMode -or $InstallServiceOnly) {
         Write-Step "7/7 Install Windows Service (auto-start saat boot)..." 'Green'
 
         # Ensure admin
@@ -401,9 +428,9 @@ try {
     }
 
     # -- Step 7b: foreground run + post-launch verify --------------------------
-    Write-Step "7/7 Starting daemon (foreground - Ctrl+C kalau mau stop)..." 'Green'
-    Write-Host "  Logs: stdout window ini" -ForegroundColor DarkGray
-    Write-Host "  Auto-start saat boot Windows: ulangi installer + flag -InstallServiceOnly (perlu Admin)" -ForegroundColor DarkGray
+    Write-Step "7/7 Starting daemon (FOREGROUND mode - debug/testing)..." 'Yellow'
+    Write-Host "  Mode ini cuma untuk debug. Tutup window = daemon mati. PC restart = daemon ga auto-start." -ForegroundColor Yellow
+    Write-Host "  Untuk production 24/7: Ctrl+C window ini, terus run installer LAGI sebagai Administrator (default = Service mode auto-start)." -ForegroundColor DarkGray
     Write-Host ""
     Write-Host "============================================================" -ForegroundColor Green
     Write-Host "  yeehee daemon - SIAP" -ForegroundColor Green
@@ -421,7 +448,7 @@ try {
     if ($exitCode -ne 0 -and $exitCode -ne $null) {
         Write-Host "[yeehee] [WARN] Daemon exited code $exitCode (bukan Ctrl+C clean shutdown)" -ForegroundColor Yellow
         Write-Host "  Restart: python -m daemon.main (di folder $InstallDir)" -ForegroundColor DarkGray
-        Write-Host "  Atau install Service biar auto-restart kalau crash. Run installer ulang dengan flag -InstallServiceOnly (perlu Admin)." -ForegroundColor DarkGray
+        Write-Host "  Atau install Service biar auto-restart kalau crash. Run installer ULANG sebagai Administrator (default = Service mode)." -ForegroundColor DarkGray
     } else {
         Write-Host "[yeehee] Daemon stopped clean (Ctrl+C). Sampai jumpa." -ForegroundColor Cyan
     }

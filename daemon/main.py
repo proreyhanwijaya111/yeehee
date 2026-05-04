@@ -78,6 +78,9 @@ def signal_loop(store: SettingsStore, log=print):
             try:
                 bundle = run_once(store, settings, log=log)
                 last_signal_at = bundle.get("timestamp")
+                # Push heartbeat dengan last_signal_at setelah cycle sukses,
+                # supaya UI /more/settings bisa nampilin "signal X menit lalu"
+                push_heartbeat(store, last_signal_at=last_signal_at, error=None)
             except Exception as e:
                 log(f"[signal] cycle error: {e!r}")
                 traceback.print_exc()
