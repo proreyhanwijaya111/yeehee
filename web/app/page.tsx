@@ -1,6 +1,6 @@
 'use client'
 import useSWR from 'swr'
-import { RefreshCw } from 'lucide-react'
+import { RefreshCw, Coins } from 'lucide-react'
 import { getSignals } from '@/lib/api'
 import HeroCard from '@/components/HeroCard'
 import MacroSnapshot from '@/components/MacroSnapshot'
@@ -26,56 +26,74 @@ export default function HomePage() {
   if (!data)     return null
 
   return (
-    <main className="max-w-lg mx-auto px-4 pt-4 pb-2 space-y-3 animate-fade-in">
+    <main className="max-w-lg mx-auto px-4 pt-4 pb-2 animate-fade-in">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-lg font-black text-slate-100">🪙 yeehee</h1>
-          <p className="text-[11px] text-slate-500">XAU/USD Signal · {data.timestamp}</p>
+      <header className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2.5">
+          <div className="w-8 h-8 rounded-lg bg-amber-700/30 border border-amber-600/30 flex items-center justify-center">
+            <Coins size={16} className="text-amber-300" />
+          </div>
+          <div>
+            <h1 className="text-lg font-black text-slate-100 leading-tight">yeehee</h1>
+            <p className="text-[10px] text-slate-500 font-mono">XAU/USD · {formatTime(data.timestamp)}</p>
+          </div>
         </div>
         <button
           onClick={handleRefresh}
-          className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 transition-colors touch-action active:scale-95"
+          className="p-2 rounded-lg bg-slate-800/60 border border-slate-700/50 hover:bg-slate-800 transition-colors touch-action active:scale-95"
+          aria-label="Refresh"
         >
-          <RefreshCw size={16} className="text-slate-400" />
+          <RefreshCw size={14} className="text-slate-400" />
         </button>
-      </div>
+      </header>
 
-      {/* News alerts */}
-      {data.in_news_blackout && (
-        <NewsAlert type="blackout" event={data.blackout_event} />
-      )}
-      {!data.in_news_blackout && data.upcoming_events?.[0] && (
-        <NewsAlert type="warning" event={data.upcoming_events[0]} />
-      )}
+      <div className="space-y-4">
+        {/* News alerts */}
+        {data.in_news_blackout && <NewsAlert type="blackout" event={data.blackout_event} />}
+        {!data.in_news_blackout && data.upcoming_events?.[0] && (
+          <NewsAlert type="warning" event={data.upcoming_events[0]} />
+        )}
 
-      {/* Hero */}
-      <HeroCard bundle={data} />
+        {/* Hero */}
+        <HeroCard bundle={data} />
 
-      {/* Quick signal cards — horizontal scroll on mobile */}
-      <div>
-        <p className="text-xs text-slate-400 font-semibold uppercase tracking-wider mb-2">
-          Sinyal Per Gaya Trading
-        </p>
-        <div className="flex gap-3 overflow-x-auto pb-1 -mx-1 px-1 snap-x snap-mandatory">
-          {[
-            { style: 'scalper'  as const, sig: data.scalper_signal  },
-            { style: 'intraday' as const, sig: data.intraday_signal },
-            { style: 'swing'    as const, sig: data.swing_signal    },
-          ].map(({ style, sig }) => (
-            <div key={style} className="min-w-[280px] snap-start">
-              <SignalCard style={style} signal={sig} />
-            </div>
-          ))}
+        {/* Quick signal cards — horizontal scroll */}
+        <div>
+          <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-widest mb-1.5 px-2">
+            Sinyal per gaya trading
+          </p>
+          <div className="flex gap-3 overflow-x-auto pb-1 -mx-1 px-1 snap-x snap-mandatory">
+            {[
+              { style: 'scalper'  as const, sig: data.scalper_signal  },
+              { style: 'intraday' as const, sig: data.intraday_signal },
+              { style: 'swing'    as const, sig: data.swing_signal    },
+            ].map(({ style, sig }) => (
+              <div key={style} className="min-w-[280px] snap-start">
+                <SignalCard style={style} signal={sig} />
+              </div>
+            ))}
+          </div>
         </div>
+
+        {/* Macro */}
+        <MacroSnapshot intermarket={data.intermarket} cot={data.cot} />
+
+        <p className="text-center text-[10px] text-slate-600 pt-1 pb-1">
+          Auto-refresh 5 menit · personal use only
+        </p>
       </div>
-
-      {/* Macro snapshot */}
-      <MacroSnapshot intermarket={data.intermarket} cot={data.cot} />
-
-      <p className="text-center text-[10px] text-slate-600 pb-1">
-        Auto-refresh tiap 5 mnt · Hanya untuk penggunaan pribadi
-      </p>
     </main>
   )
+}
+
+function formatTime(iso: string): string {
+  try {
+    const d = new Date(iso)
+    return d.toLocaleString('id-ID', {
+      hour: '2-digit', minute: '2-digit',
+      day: '2-digit', month: 'short',
+    })
+  } catch {
+    return iso
+  }
 }
