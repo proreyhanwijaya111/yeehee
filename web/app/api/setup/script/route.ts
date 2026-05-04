@@ -269,10 +269,15 @@ try {
     }
     Write-OK "venv ready"
 
-    # -- Step 4: deps -----------------------------------------------------------
-    Write-Step "4/7 Install Python dependencies (~3-5 menit pertama kali)..."
-    Invoke-Native -Cmd $Py -Args @("-m","pip","install","--upgrade","pip","--quiet","--no-cache-dir") -Label "pip upgrade" -Quiet -Retries 1
-    Invoke-Native -Cmd $Py -Args @("-m","pip","install","-r","$InstallDir\\daemon\\requirements.txt","--quiet","--no-cache-dir") -Label "pip install daemon deps" -Retries 2
+    # -- Step 4: deps (lean ~80 MB) --------------------------------------------
+    Write-Step "4/7 Install Python dependencies (~80 MB, 2-5 menit di koneksi normal)..."
+    Write-Host "  Tip: koneksi lambat? Biarkan retry jalan - pip resume dari posisi terakhir." -ForegroundColor DarkGray
+    # --timeout 180   : socket timeout 3 min per chunk (default 15s, putus di koneksi lambat)
+    # --retries 15    : pip retry per chunk timeout (default 5)
+    # --prefer-binary : skip source builds, pakai wheel
+    $pipFlags = @("--timeout","180","--retries","15","--prefer-binary","--no-cache-dir","--disable-pip-version-check")
+    Invoke-Native -Cmd $Py -Args (@("-m","pip","install","--upgrade","pip") + $pipFlags) -Label "pip upgrade" -Quiet -Retries 1
+    Invoke-Native -Cmd $Py -Args (@("-m","pip","install","-r","$InstallDir\\daemon\\requirements.txt") + $pipFlags) -Label "pip install daemon deps" -Retries 3
     Write-OK "deps installed"
 
     # -- Step 5: write .env -----------------------------------------------------
