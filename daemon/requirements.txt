@@ -1,0 +1,24 @@
+# yeehee daemon — minimal deps (no streamlit/plotly/anthropic)
+# pasangan dari `requirements.txt` di repo root yang berat.
+
+# ── Data ──────────────────────────────────────────────────────────────────────
+yfinance>=0.2.40
+pandas>=2.1.0
+numpy>=1.26.0
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+
+# ── Stats (untuk regime + intermarket scoring) ───────────────────────────────
+scipy>=1.11.0
+statsmodels>=0.14.0
+
+# ── HTTP client (LLM router) + Supabase ──────────────────────────────────────
+httpx>=0.27.0
+supabase>=2.10.0
+
+# ── Config / utils ───────────────────────────────────────────────────────────
+python-dotenv>=1.0.0
+pydantic>=2.6.0
+tenacity>=8.2.0
+psutil>=5.9.0
