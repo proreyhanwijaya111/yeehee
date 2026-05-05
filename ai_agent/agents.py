@@ -887,6 +887,9 @@ def _build_user_prompts(market_ctx: dict) -> dict[str, str]:
     def _j(d: dict) -> str:
         return json.dumps(d, separators=(",", ":"), default=str)
 
+    rcs_num   = market_ctx.get("rcs_numeric") or {}
+    rcs_text  = market_ctx.get("rcs_text", "RCS unavailable")
+
     base_block = (
         f"Market context (XAU/USD):\n"
         f"- price={price}, session={session}, regime={regime}, focus={timeframe_focus}\n"
@@ -897,6 +900,7 @@ def _build_user_prompts(market_ctx: dict) -> dict[str, str]:
         f"intermarket_data={_j(inter_num)}\n"
         f"cot_data={_j(cot_num)}\n"
         f"news_data={_j(news_num)}\n"
+        f"rcs_composite_indicator={_j(rcs_num)}  # RCS = our in-house composite of all indicators above; use as REFERENCE\n"
         f"\n[Text summary - human-readable redundancy, prefer JSON above]\n"
         f"- HTF: {htf_text}\n"
         f"- LTF: {ltf_text}\n"
@@ -904,6 +908,7 @@ def _build_user_prompts(market_ctx: dict) -> dict[str, str]:
         f"- intermarket: {inter_text}\n"
         f"- COT: {cot_text}\n"
         f"- news: {news_text}\n"
+        f"- RCS: {rcs_text}\n"
     )
 
     backtest_text = market_ctx.get("backtest_text", "no historical data")

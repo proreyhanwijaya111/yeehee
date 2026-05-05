@@ -8,6 +8,7 @@ import NewsAlert from '@/components/NewsAlert'
 import SignalCard from '@/components/SignalCard'
 import LiveTicker from '@/components/LiveTicker'
 import PortfolioGlance from '@/components/PortfolioGlance'
+import RcsPanel from '@/components/RcsPanel'
 import { ErrorState } from '@/components/LoadingSpinner'
 import { clearApiCache } from '@/lib/api'
 import { formatTriggerReason } from '@/lib/utils'
@@ -114,6 +115,8 @@ export default function HomeClient({
             ))}
           </div>
         </div>
+
+        <RcsPanel rcs={data.rcs ?? null} />
 
         <MacroSnapshot intermarket={data.intermarket} cot={data.cot} />
 

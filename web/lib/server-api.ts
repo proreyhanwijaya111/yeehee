@@ -222,7 +222,52 @@ function mapBundleRowToSignalBundle(row: Record<string, unknown>): SignalBundle 
     confidence:      Number(row.confidence ?? 0),
     // Opsi B: trigger_reason. May be null on legacy rows (pre-migration 005).
     trigger_reason:  row.trigger_reason ? String(row.trigger_reason) : undefined,
+    rcs:             null,   // populated by SSR page via getLatestRcsSignal() in parallel fetch
   }
+}
+
+// ─── RCS composite indicator (read from rcs_signals table) ──────────────────────
+
+/** Latest RCS signal row. Mirror of rcs_signals schema (migration 008). */
+export interface RCSSignalRow {
+  id:              number
+  generated_at:    string
+  timeframe:       'M5' | 'M15' | 'H1'
+  broker_symbol:   string
+  spot_price:      number
+  atr_14:          number
+  prob_long:       number
+  prob_short:      number
+  prob_neutral:    number
+  rcs_score:       number
+  direction:       'LONG' | 'SHORT' | 'WAIT'
+  entry:           number | null
+  sl:              number | null
+  tp1:             number | null
+  tp2:             number | null
+  confidence_pct:  number
+  feature_snapshot: Record<string, { score: number; weight: number; detail: string }>
+  shap_top_5:      Array<{ name: string; contribution: number; detail: string }>
+  model_version:   string
+  outcome:         string | null
+  prediction_correct: boolean | null
+}
+
+/** Fetch latest RCS signal (most recent across all timeframes, or filtered by tf). */
+export async function getLatestRcsSignal(timeframe?: 'M5' | 'M15' | 'H1'): Promise<RCSSignalRow | null> {
+  let url = `rcs_signals?select=*&order=generated_at.desc&limit=1`
+  if (timeframe) url += `&timeframe=eq.${timeframe}`
+  const rows = await supabaseGet<RCSSignalRow[]>(url, { revalidate: 30 })
+  return rows && rows.length > 0 ? rows[0] : null
+}
+
+/** Fetch RCS signals history for monitoring page. */
+export async function getRcsHistory(limit: number = 50): Promise<RCSSignalRow[]> {
+  const rows = await supabaseGet<RCSSignalRow[]>(
+    `rcs_signals?select=*&order=generated_at.desc&limit=${limit}`,
+    { revalidate: 30 },
+  )
+  return rows ?? []
 }
 
 function normaliseSignal(raw: unknown): SignalBundle['scalper_signal'] {

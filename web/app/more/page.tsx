@@ -1,7 +1,7 @@
 import Link from 'next/link'
 import {
   Settings, Server, Brain, Cpu, Send, FlaskConical, BookOpen, Newspaper,
-  Calculator, ChevronRight, Github, ExternalLink,
+  Calculator, ChevronRight, Github, ExternalLink, Sparkles,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -23,8 +23,9 @@ const SECTIONS: Section[] = [
   {
     title: 'Tools',
     items: [
-      { href: '/calculator',     icon: Calculator,   label: 'Kalkulator posisi',  desc: 'Hitung lot size dari profile risk + level signal' },
-      { href: '/more/backtest',  icon: FlaskConical, label: 'Test strategi',      desc: 'Backtest historis XAU + Monte Carlo' },
+      { href: '/calculator',         icon: Calculator,   label: 'Kalkulator posisi',  desc: 'Hitung lot size dari profile risk + level signal' },
+      { href: '/more/backtest',      icon: FlaskConical, label: 'Test strategi',      desc: 'Backtest historis XAU + Monte Carlo' },
+      { href: '/more/rcs-monitor',   icon: Sparkles,     label: 'RCS Composite',      desc: 'Indikator pamungkas — gabungan semua signal jadi satu', badge: 'v0.1' },
     ],
   },
   {

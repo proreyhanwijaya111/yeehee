@@ -423,6 +423,7 @@ def build_market_context(
     df_15m, df_4h, intermarket: dict, cot: dict, session: str, regime: str,
     in_blackout: bool, blackout_event, upcoming_events: list,
     timeframe_focus: str = "intraday",
+    rcs_result: Optional[dict] = None,
 ) -> dict:
     """Build market context for LLM agents.
 
@@ -431,7 +432,26 @@ def build_market_context(
       - legacy text (*_text) for backward compat + readability
 
     Both are passed to agents; system prompts instruct them to PREFER JSON over text.
+
+    rcs_result: optional dict from rcs.composite.compute_rcs(...).to_dict() —
+      indicator pamungkas yang gabungin semua existing indikator. Disinjeksi ke
+      prompts sebagai REFERENCE untuk synthesizer/devil's advocate.
     """
+    rcs_numeric = {}
+    rcs_text    = "RCS indicator unavailable"
+    if rcs_result:
+        rcs_numeric = {
+            "rcs_score":      rcs_result.get("rcs_score"),
+            "direction":      rcs_result.get("direction"),
+            "confidence_pct": rcs_result.get("confidence_pct"),
+            "top_drivers":    rcs_result.get("top_drivers", [])[:3],
+        }
+        rcs_text = (
+            f"RCS={rcs_result.get('rcs_score', 0):+.3f} "
+            f"({rcs_result.get('direction')}, conf {rcs_result.get('confidence_pct')}%) "
+            f"drivers: {'; '.join(rcs_result.get('top_drivers', [])[:2])}"
+        )
+
     return {
         "price":     float(df_15m["close"].iloc[-1]) if df_15m is not None and len(df_15m) else 0.0,
         "session":   session,
@@ -444,6 +464,9 @@ def build_market_context(
         "inter_numeric": extract_intermarket_numeric(intermarket or {}),
         "cot_numeric":   extract_cot_numeric(cot or {}),
         "news_numeric":  extract_news_numeric(in_blackout, blackout_event, upcoming_events or []),
+        # RCS — composite reference indicator (Phase 1 v0.1)
+        "rcs_numeric":   rcs_numeric,
+        "rcs_text":      rcs_text,
         # Legacy text (back-compat)
         "htf_text":  build_htf_context(df_4h),
         "ltf_text":  build_ltf_context(df_15m),

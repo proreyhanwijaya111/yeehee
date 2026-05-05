@@ -1,8 +1,8 @@
-// Server Component — fetches signal_bundle + portfolio data, hands to
-// HomeClient. SWR hydrates from initialBundle (no "Memuat..." flash).
+// Server Component — fetches signal_bundle + portfolio + RCS in parallel.
+// SWR hydrates from initialBundle (no "Memuat..." flash).
 import HomeClient from './HomeClient'
 import {
-  getLatestSignalBundle, getActiveTrades, getPortfolioStats,
+  getLatestSignalBundle, getActiveTrades, getPortfolioStats, getLatestRcsSignal,
 } from '@/lib/server-api'
 
 export const revalidate = 60
@@ -10,16 +10,32 @@ export const revalidate = 60
 export default async function HomePage() {
   let initialBundle = null
   let serverError: string | null = null
-  // Fetch portfolio data in parallel (don't block on signals if portfolio fails)
-  const [bundleResult, openTrades, stats] = await Promise.all([
+  const [bundleResult, openTrades, stats, rcs] = await Promise.all([
     getLatestSignalBundle().catch((e) => {
       serverError = e instanceof Error ? e.message : 'Failed to load initial signal'
       return null
     }),
     getActiveTrades({ status: 'OPEN', limit: 10 }).catch(() => []),
     getPortfolioStats().catch(() => null),
+    getLatestRcsSignal('M15').catch(() => null),
   ])
   initialBundle = bundleResult
+  if (initialBundle && rcs) {
+    initialBundle.rcs = {
+      rcs_score:      rcs.rcs_score,
+      direction:      rcs.direction,
+      confidence_pct: rcs.confidence_pct,
+      components:     Object.entries(rcs.feature_snapshot ?? {}).map(([name, v]) => ({
+        name: name as 'trend' | 'momentum' | 'structure' | 'intermarket' | 'volatility' | 'session',
+        score:  Number(v.score),
+        weight: Number(v.weight),
+        detail: String(v.detail ?? ''),
+      })),
+      top_drivers:    (rcs.shap_top_5 ?? []).map(d => `${d.name}: ${d.detail} (${d.contribution >= 0 ? '+' : ''}${d.contribution.toFixed(2)})`),
+      regime:         '',
+      session:        '',
+    }
+  }
   return (
     <HomeClient
       initialBundle={initialBundle}

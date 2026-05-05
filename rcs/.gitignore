@@ -1,0 +1,25 @@
+# Real .env (with secrets)
+.env
+
+# Trained models (large, regenerate from training)
+models/*.pkl
+
+# Raw data + features (large, regenerate from MT5 + recompute)
+data/raw/*.parquet
+data/features/*.parquet
+data/labels/*.parquet
+data/raw/*.meta.json
+data/features/*.meta.json
+
+# Notebook outputs (keep .ipynb but strip outputs)
+notebooks/.ipynb_checkpoints/
+
+# Logs
+*.log
+daemon.log
+daemon.error.log
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo

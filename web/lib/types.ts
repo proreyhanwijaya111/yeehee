@@ -104,6 +104,24 @@ export interface SignalBundle {
   confidence:       number
   /** Opsi B: why this cycle ran. 'scheduled' | 'price_spike_up_X.XXpct' | 'ema9_21_bullish_cross' | 'atr_explosion_X.Xx' | 'volume_spike_X.Xx' | 'blackout_exit' | 'manual' */
   trigger_reason?:  string
+  /** RCS composite reference indicator (Phase 1 v0.1 — pure aggregation of existing features) */
+  rcs?:             RCSReference | null
+}
+
+/** RCS — REY Composite Signal output. Reference indicator alongside 12-agent system. */
+export interface RCSReference {
+  rcs_score:       number      // [-1, +1]
+  direction:       'LONG' | 'SHORT' | 'WAIT'
+  confidence_pct:  number      // 0-95
+  components: Array<{
+    name:    'trend' | 'momentum' | 'structure' | 'intermarket' | 'volatility' | 'session'
+    score:   number
+    weight:  number
+    detail:  string
+  }>
+  top_drivers:     string[]
+  regime:          string
+  session:         string
 }
 
 export interface PositionPlan {

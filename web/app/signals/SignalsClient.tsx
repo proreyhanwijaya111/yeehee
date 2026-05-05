@@ -4,6 +4,7 @@ import { TrendingUp, Zap, Clock } from 'lucide-react'
 import { getSignals } from '@/lib/api'
 import SignalCard from '@/components/SignalCard'
 import MacroSnapshot from '@/components/MacroSnapshot'
+import RcsPanel from '@/components/RcsPanel'
 import { ErrorState } from '@/components/LoadingSpinner'
 import { STRENGTH_LABEL, STRENGTH_COLOR, fmtPrice, formatTriggerReason } from '@/lib/utils'
 import type { SignalBundle } from '@/lib/types'
@@ -83,6 +84,8 @@ export default function SignalsClient({ initialBundle, serverError }: Props) {
           <SignalCard style="intraday" signal={data.intraday_signal} />
           <SignalCard style="swing"    signal={data.swing_signal} />
         </div>
+
+        <RcsPanel rcs={data.rcs ?? null} />
 
         <MacroSnapshot intermarket={data.intermarket} cot={data.cot} />
       </div>

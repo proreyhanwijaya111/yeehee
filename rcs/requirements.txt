@@ -1,0 +1,41 @@
+# RCS dependencies. Install dengan:
+#   .\.venv\Scripts\python.exe -m pip install -r rcs\requirements.txt
+
+# Already in main daemon (don't duplicate, but listed for clarity):
+# pandas
+# numpy
+# python-dotenv
+# pyarrow
+# supabase
+
+# ML stack (rcs-only)
+scikit-learn>=1.4.0
+xgboost>=2.0.3
+optuna>=3.5.0
+joblib>=1.3.2
+
+# Indicator computation (technical features beyond what features/technical.py has)
+# pandas-ta has install pain on some platforms; we use pure-python alternative below if needed.
+# pandas-ta>=0.3.14b
+ta>=0.11.0
+
+# Configuration
+PyYAML>=6.0
+
+# MT5 integration — Windows only. Skipped silently on macOS/Linux dev machines.
+# (Daemon will fall back to MOCK mode if MetaTrader5 lib unavailable.)
+MetaTrader5>=5.0.45 ; sys_platform == "win32"
+
+# Optional: FastAPI for EA polling endpoint (Phase 10, not built yet)
+fastapi>=0.110.0
+uvicorn>=0.27.0
+
+# Timezone handling (broker server tz vs UTC)
+pytz>=2024.1
+
+# Optional explainability (SHAP top-5 features per signal)
+shap>=0.44.0
+
+# Plotting for notebooks (optional during EDA)
+matplotlib>=3.8.2
+seaborn>=0.13.2

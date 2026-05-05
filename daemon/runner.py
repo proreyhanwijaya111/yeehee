@@ -22,6 +22,14 @@ from ai_agent.orchestrator import (
     SettingsStore, run_llm_debate, build_market_context,
 )
 
+# RCS — composite reference indicator (optional, gracefully skipped if package missing)
+try:
+    from rcs.composite import compute_rcs
+    from rcs.persistence import push_rcs_signal
+    RCS_AVAILABLE = True
+except ImportError:
+    RCS_AVAILABLE = False
+
 
 def run_once(store: SettingsStore, settings: dict, log=print, trigger_reason: str = "scheduled") -> dict:
     """Run one signal cycle. Returns the bundle dict.
@@ -64,6 +72,25 @@ def run_once(store: SettingsStore, settings: dict, log=print, trigger_reason: st
     sig_intraday = intraday.generate(_ctx(df_15m, df_4h))
     sig_swing    = swing.generate(_ctx(df_4h, df_1d))
 
+    # ── RCS composite reference indicator ─────────────────────────────────────
+    # Computes single composite score [-1, +1] from existing features as
+    # ADDITIONAL reference for 12-agent debate. Output also persisted to
+    # rcs_signals table for monitoring + future EA consumption.
+    rcs_result_dict = None
+    if RCS_AVAILABLE:
+        try:
+            rcs_result = compute_rcs(
+                df_4h=df_4h, df_15m=df_15m,
+                intermarket=inter,
+                session=sess,
+                regime=regime_label,
+            )
+            rcs_result_dict = rcs_result.to_dict()
+            log(f"[rcs] score={rcs_result.rcs_score:+.3f} dir={rcs_result.direction} conf={rcs_result.confidence_pct}% top={rcs_result.top_drivers[:1]}")
+        except Exception as e:
+            log(f"[rcs] compute failed: {e!r}")
+            rcs_result_dict = None
+
     # 9-agent debate (LLM) or fallback rule debate
     use_llm = bool(settings.get("use_llm_agents", True))
     debate_dict: dict
@@ -77,6 +104,7 @@ def run_once(store: SettingsStore, settings: dict, log=print, trigger_reason: st
             in_blackout=in_blk, blackout_event=blk_evt,
             upcoming_events=upc,
             timeframe_focus=settings.get("timeframe_focus") or "intraday",
+            rcs_result=rcs_result_dict,   # RCS composite reference
         )
         try:
             debate_dict = run_llm_debate(
@@ -130,6 +158,8 @@ def run_once(store: SettingsStore, settings: dict, log=print, trigger_reason: st
         "swing":          sig_swing.to_dict(),
         "debate":         debate_dict,
         "ai_pm_used":     use_llm,
+        # RCS composite reference indicator (read by /signals UI as side panel)
+        "rcs":            rcs_result_dict,
         # Opsi B: persisted to signal_bundles.trigger_reason
         "_trigger_reason": trigger_reason,
     }
@@ -147,6 +177,43 @@ def run_once(store: SettingsStore, settings: dict, log=print, trigger_reason: st
     bundle_id = None
     if is_primary:
         bundle_id = store.push_signal_bundle(bundle)
+
+        # ── Push RCS to rcs_signals (PRIMARY only) ────────────────────────────
+        # Used by /more/rcs-monitor UI for history + accuracy tracking, and as
+        # data source for future MT5 EA bot polling.
+        if RCS_AVAILABLE and rcs_result_dict and bundle.get("xau_price"):
+            try:
+                from rcs.composite import RCSResult, ComponentScore
+                # Reconstruct RCSResult from dict so we can pass to push helper
+                comps = [ComponentScore(**c) for c in rcs_result_dict["components"]]
+                result_obj = RCSResult(
+                    rcs_score=rcs_result_dict["rcs_score"],
+                    direction=rcs_result_dict["direction"],
+                    confidence_pct=rcs_result_dict["confidence_pct"],
+                    components=comps,
+                    top_drivers=rcs_result_dict.get("top_drivers", []),
+                    regime=rcs_result_dict.get("regime", regime_label),
+                    session=rcs_result_dict.get("session", sess),
+                )
+                # Use intraday signal levels (15m) as default entry/sl/tp for RCS
+                # (RCS itself doesn't compute levels — just direction. Levels are
+                # for future EA consumption based on user's preferred TF.)
+                sig_levels = sig_intraday.to_dict()
+                push_rcs_signal(
+                    store=store,
+                    result=result_obj,
+                    timeframe="M15",
+                    spot_price=float(bundle["xau_price"]),
+                    atr_14=float(df_15m["atr14"].iloc[-1]) if "atr14" in df_15m.columns else 0.0,
+                    broker_symbol="XAUUSD",
+                    entry=sig_levels.get("entry"),
+                    sl=sig_levels.get("sl"),
+                    tp1=sig_levels.get("tp1"),
+                    tp2=sig_levels.get("tp2"),
+                    log=log,
+                )
+            except Exception as e:
+                log(f"[rcs] push_rcs_signal failed: {e!r}")
     else:
         log("[runner] STANDBY mode — skip push_signal_bundle (primary handles it)")
 

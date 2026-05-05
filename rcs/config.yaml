@@ -1,0 +1,95 @@
+# RCS — REY Composite Signal config.
+# Edit broker symbol + tz_offset sesuai broker MT5 lo.
+# Cek di MT5: View → Symbols → Show all → cari "Gold" / "XAU"
+
+mt5:
+  # Broker symbol untuk gold (CEK BROKER LO!) - common variants:
+  # - "XAUUSD"   most brokers (FXTM, IC Markets, Tickmill, Exness standard)
+  # - "XAUUSD."  Tickmill, IC Markets dengan suffix
+  # - "XAUUSDm"  Exness micro
+  # - "GOLD"     some brokers (Pepperstone)
+  # - "XAUUSD.s" some bid-ask suffix
+  symbol: "XAUUSD"
+
+  # Point size (gold biasanya 0.01 = 1 pip, tapi cek broker lo)
+  # Verify: SymbolInfoDouble(symbol, SYMBOL_POINT)
+  point_size: 0.01
+
+  # Tick value untuk 1 lot (USD per 1 point movement)
+  # Verify: SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE)
+  tick_value_per_lot: 1.0
+
+  # Min/max lot, lot step (cek SymbolInfo)
+  min_lot: 0.01
+  max_lot: 100.0
+  lot_step: 0.01
+
+  # Stop level: minimum SL/TP distance dari current price (in points)
+  # Verify: SymbolInfoInteger(symbol, SYMBOL_TRADE_STOPS_LEVEL)
+  stops_level_points: 30
+
+  # Server timezone offset dari UTC (broker biasanya GMT+2 atau GMT+3)
+  # Cek di MT5: Tools → Options → Server (atau hover di clock di chart)
+  server_tz_offset_hours: 2
+
+  # Display timezone untuk UI yeehee
+  display_tz: "Asia/Jakarta"  # WIB (UTC+7)
+
+data:
+  # Berapa tahun history yang akan di-fetch saat first ingestion
+  # PERHATIAN: MT5 Default "Max bars in history" = 100k. Untuk M5 = ~6 bulan.
+  # Set "Unlimited" di MT5: Tools → Options → Charts → Max bars
+  history_years: 3
+
+  # Timeframes yang akan di-train
+  timeframes: ["M5", "M15", "H1"]
+
+model:
+  # Path relative ke rcs/ folder
+  m5_path:  "models/xgb_m5.pkl"
+  m15_path: "models/xgb_m15.pkl"
+  h1_path:  "models/xgb_h1.pkl"
+
+  # Baseline (logistic regression untuk benchmark)
+  m5_baseline_path:  "models/logreg_m5.pkl"
+  m15_baseline_path: "models/logreg_m15.pkl"
+  h1_baseline_path:  "models/logreg_h1.pkl"
+
+# Triple barrier params per TF (Phase 3 of spec)
+labeling:
+  M5:  { k_tp: 1.5, k_sl: 1.0, max_hold_candles: 24 }   # ~2 jam horizon
+  M15: { k_tp: 2.0, k_sl: 1.5, max_hold_candles: 32 }   # ~8 jam
+  H1:  { k_tp: 2.5, k_sl: 2.0, max_hold_candles: 48 }   # ~2 hari
+
+inference:
+  # Daemon refresh interval per TF (seconds)
+  m5_interval_seconds:  300       # 5 min
+  m15_interval_seconds: 900       # 15 min
+  h1_interval_seconds:  3600      # 1 jam
+
+  # Threshold confidence untuk push ke Telegram
+  confidence_threshold_telegram: 65
+
+  # RCS score thresholds untuk klasifikasi direction
+  # rcs_score = prob_long - prob_short, range [-1, +1]
+  long_threshold:  0.40
+  short_threshold: -0.40
+
+  # Sanity check bounds (kalau di luar = bug, skip push)
+  max_entry_deviation_pct:  0.005   # 0.5% max from spot
+  min_sl_distance_pct:      0.005   # 0.5% min SL distance
+  max_sl_distance_pct:      0.030   # 3.0% max SL distance
+
+  # News filter: skip signal jika ada high-impact news dalam ±N menit
+  news_filter_minutes: 30
+
+# Phase 10 (DESIGN ONLY for now — EA tidak di-build di session ini)
+api:
+  port: 8001
+  ea_polling_endpoint: "/api/ea/next-signal"
+
+# Cross-TF feature toggles (Phase 2.3)
+features:
+  enable_cross_tf: true
+  use_news_proximity: true
+  use_volume_regime: true
