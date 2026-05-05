@@ -434,6 +434,24 @@ def _evaluate_trade(trade: dict, df_5m: pd.DataFrame, now: datetime) -> Optional
     # Working copy of SL — may be moved to entry (BEP) or TP1 (lock) within this loop.
     cur_sl = sl
 
+    # Migration 013 retroactive backfill: trades opened BEFORE the BEP/lock-TP1
+    # logic was deployed may already have hit_tp1 / hit_tp2 flags set without
+    # ever moving SL. Apply the SL movement once now so they get the same
+    # safety net as new trades. (Without this, user's existing TP1✓TP2✓ trades
+    # would stay at original SL until SL or expiry.)
+    if hit_tp1 and (
+        (side == "LONG"  and cur_sl < entry) or
+        (side == "SHORT" and cur_sl > entry)
+    ):
+        cur_sl = entry
+        upd.sl_new = cur_sl
+    if hit_tp2 and tp1 > 0 and (
+        (side == "LONG"  and cur_sl < tp1) or
+        (side == "SHORT" and cur_sl > tp1)
+    ):
+        cur_sl = tp1
+        upd.sl_new = cur_sl
+
     closed_in_bar = False
 
     for ts, row in candles.iterrows():
