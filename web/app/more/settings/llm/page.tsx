@@ -81,6 +81,32 @@ export default function LLMSettingsPage() {
       </header>
 
       <div className="space-y-5">
+        {/* Tutorial intro */}
+        <div className="bg-violet-950/30 border border-violet-800/40 rounded-xl p-3.5 text-[11px] leading-relaxed">
+          <p className="text-violet-100 font-semibold mb-1.5">Apa ini buat?</p>
+          <p className="text-violet-200/80 mb-2">
+            Sistem yeehee pakai AI (LLM) sebagai 12 expert agent yang debate sebelum kasih signal. Lo perlu kasih akses ke salah satu provider LLM (gratis tier 200 req/hari cukup).
+          </p>
+          <details className="mt-2">
+            <summary className="cursor-pointer text-violet-200 font-semibold text-[11px]">📖 Cara setup OpenRouter (recommended, gratis)</summary>
+            <ol className="mt-2 list-decimal pl-4 text-[10px] text-violet-200/70 space-y-1 leading-relaxed">
+              <li>Buka <a href="https://openrouter.ai/keys" target="_blank" rel="noopener" className="text-sky-300 underline">openrouter.ai/keys</a> → login pake Google</li>
+              <li>Klik <span className="font-bold">Create Key</span> → kasih nama bebas (e.g. yeehee)</li>
+              <li>Copy key yang muncul (format <span className="font-mono">sk-or-v1-...</span>)</li>
+              <li>Balik ke halaman ini → pilih <span className="font-bold">OpenRouter</span> di Default Provider di bawah</li>
+              <li>Scroll ke section <span className="font-bold">Provider keys</span> → expand <span className="font-bold">OpenRouter</span> → paste key → klik Save</li>
+              <li>Klik <span className="font-bold">Test connection</span> — harus muncul ✓ tanda key valid</li>
+              <li>Pilih model di dropdown Model di atas (filter "free" untuk gratis tier)</li>
+            </ol>
+          </details>
+          <details className="mt-1">
+            <summary className="cursor-pointer text-violet-200 font-semibold text-[11px]">📖 Provider lain (Anthropic / OpenAI / Groq / Gemini / Ollama / LM Studio)</summary>
+            <p className="mt-2 text-[10px] text-violet-200/70 leading-relaxed">
+              Pilih provider di dropdown di bawah → liat hint untuk URL daftar. Anthropic & OpenAI berbayar, Groq & Gemini punya free tier kuat. Ollama & LM Studio buat run model lokal di PC lo (no API key needed).
+            </p>
+          </details>
+        </div>
+
         {/* Default LLM */}
         <Group title="Default LLM">
           <div className="px-3.5 py-3 space-y-3">

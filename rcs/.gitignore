@@ -3,6 +3,8 @@
 
 # Trained models (large, regenerate from training)
 models/*.pkl
+models/metadata_*.json
+models/reference_dist_*.json
 
 # Raw data + features (large, regenerate from MT5 + recompute)
 data/raw/*.parquet

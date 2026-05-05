@@ -97,11 +97,30 @@ export default function AgentsSettingsPage() {
       </header>
 
       <div className="space-y-5">
+        {/* Tutorial intro */}
+        <div className="bg-sky-950/30 border border-sky-800/40 rounded-xl p-3.5 text-[11px] leading-relaxed">
+          <p className="text-sky-100 font-semibold mb-1.5">Apa ini buat?</p>
+          <p className="text-sky-200/80 mb-2">
+            Halaman ini buat <span className="font-bold">tweak advanced</span>. Default-nya udah optimal — kebanyakan user ga perlu ubah apa-apa di sini.
+          </p>
+          <p className="text-sky-200/70">
+            Sistem yeehee pakai 12 expert AI agent (HTF Bias, LTF Technical, SMC, Order Flow, dll) yang debate sebelum kasih final signal. Halaman ini buat:
+          </p>
+          <ul className="list-disc pl-4 mt-1 space-y-0.5 text-sky-200/70">
+            <li>Disable agent tertentu (e.g. matiin Pattern Recognition)</li>
+            <li>Override per-agent: pakai model LLM beda untuk agent specific (e.g. Devil's Advocate pakai Claude, sisanya pakai Llama)</li>
+            <li>Adjust temperature / max_tokens per agent</li>
+          </ul>
+          <p className="text-amber-300/80 mt-2">
+            ⚠️ Kalau lo bingung mau ubah apa, biarin default. Default udah tested dan kerja baik.
+          </p>
+        </div>
+
         {/* Master switch */}
-        <Group title="Mode">
+        <Group title="Mode (master switch)">
           <ToggleRow
             label="Pakai LLM agent"
-            sub="Aktif: 9 LLM agent + voting via tier pipeline. Mati: rule engine deterministik (cepat tapi ga ada nuance)."
+            sub="Aktif (recommended): 12 LLM agent + weighted voting per regime. Mati: fall back ke rule engine deterministik (cepat tapi nuance kurang)."
             checked={settings.use_llm_agents}
             onChange={async v => {
               setSettings({ ...settings, use_llm_agents: v })

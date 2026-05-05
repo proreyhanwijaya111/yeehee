@@ -26,7 +26,7 @@ const KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
 // pakai 60s biar UI punya freshness window kalau user reload cepat
 const REVALIDATE_S = 60
 
-async function supabaseGet<T = unknown>(path: string, opts?: { revalidate?: number }): Promise<T | null> {
+export async function supabaseGet<T = unknown>(path: string, opts?: { revalidate?: number }): Promise<T | null> {
   if (!URL || !KEY) return null
   try {
     const r = await fetch(`${URL}/rest/v1/${path}`, {

@@ -226,16 +226,44 @@ export default function DaemonPage() {
 
       {activeTab === 'install' && (
         <>
+          {/* INTRO — what is this for */}
+          <div className="bg-sky-950/30 border border-sky-800/40 rounded-xl p-3.5 text-[11px] leading-relaxed">
+            <p className="text-sky-100 font-semibold mb-1.5">Install daemon di PC rumah lo</p>
+            <p className="text-sky-200/80 mb-2">
+              Daemon = program kecil yang jalan terus di PC lo, fetch data XAU + jalanin AI agent + push signal ke cloud. Tanpa daemon, signal di app tidak update otomatis.
+            </p>
+            <p className="text-sky-200/70">
+              <span className="font-semibold text-sky-100">Total waktu</span>: ~5 menit (otomatis install Python + Git kalo belum ada). Cukup 1× setup per PC.
+            </p>
+          </div>
+
+          {/* STEP 1: Fill API keys */}
           <Section
-            title="Optional API keys (multi-PC support)"
-            sub="Isi key di sini biar generated install one-liner langsung embed semua kredensial. Disimpan di localStorage browser lo (tidak ke server). Kosong = installer skip key tersebut, daemon fall back ke mode minimum."
+            title="Langkah 1 · Isi API key (di HP/laptop ini, BUKAN PC tujuan)"
+            sub="Form ini cuma simpan key di browser lo (localStorage). Kosong juga boleh, tapi daemon-nya kurang optimal. Lo bisa skip ini kalo udah pernah isi sebelumnya."
           >
+            <div className="bg-slate-900/40 border border-slate-700/50 rounded-lg p-3 mb-3 text-[11px] text-slate-400 space-y-1.5 leading-relaxed">
+              <p className="text-slate-200 font-semibold">Cara dapat API key (semua gratis):</p>
+              <p>
+                <span className="font-bold text-amber-300">OpenRouter</span>: buka{' '}
+                <a href="https://openrouter.ai/keys" target="_blank" rel="noopener" className="text-sky-300 underline">openrouter.ai/keys</a>{' '}
+                → login Google → Create Key → copy
+              </p>
+              <p>
+                <span className="font-bold text-amber-300">Twelve Data</span>: buka{' '}
+                <a href="https://twelvedata.com" target="_blank" rel="noopener" className="text-sky-300 underline">twelvedata.com</a>{' '}
+                → Sign Up → Dashboard → API Keys → copy
+              </p>
+              <p>
+                <span className="font-bold text-amber-300">Supabase service key</span> (optional): Supabase dashboard → Settings → API → service_role secret
+              </p>
+            </div>
             <KeyInput
               label="OpenRouter API key"
               placeholder="sk-or-v1-..."
               value={openRouterKey}
               onChange={(v) => { setOpenRouterKey(v); persistKey(LS_OPENROUTER, v) }}
-              hint="Tanpa ini: daemon fall back ke rule_engine 4-agent. Gratis di openrouter.ai/keys (200 req/day)."
+              hint="Tanpa ini → daemon pakai 4-agent rule_engine (kurang akurat). Dengan ini → 12-agent LLM full pipeline."
               showSecrets={showSecrets}
             />
             <KeyInput
@@ -243,23 +271,35 @@ export default function DaemonPage() {
               placeholder="33e7..."
               value={twelveKey}
               onChange={(v) => { setTwelveKey(v); persistKey(LS_TWELVE, v) }}
-              hint="Tanpa ini: XAU spot pakai yfinance (15min delay). Gratis di twelvedata.com (800 req/day)."
+              hint="Tanpa ini → harga emas delay 15 menit (yfinance). Dengan ini → real-time spot."
               showSecrets={showSecrets}
             />
             <KeyInput
-              label="Supabase service-role key (optional)"
+              label="Supabase service-role key (optional, boleh kosong)"
               placeholder="eyJh..."
               value={svcKey}
               onChange={(v) => { setSvcKey(v); persistKey(LS_SVCKEY, v) }}
-              hint="Optional, untuk RLS bypass. Anon key cukup untuk dev. Service key dari Supabase dashboard → Settings → API → service_role secret."
+              hint="Anon key dari env udah cukup. Service key cuma kalo lo enable Row-Level Security di Supabase."
               showSecrets={showSecrets}
             />
+            <p className="text-[10px] text-emerald-400 mt-2">
+              ✓ Key disimpan di browser lo doang (localStorage), tidak di-upload ke server kita.
+            </p>
           </Section>
 
+          {/* STEP 2: Copy + Run */}
           <Section
-            title="One-liner Install"
-            sub="Buka PowerShell biasa (BUKAN CMD), paste 1 baris ini, Enter sekali. Auto: install Python+Git kalau belum ada, clone repo, setup venv, install deps, write config, run daemon. Jalan di PC manapun."
+            title="Langkah 2 · Copy 1 baris di bawah, paste ke PowerShell di PC tujuan"
+            sub="Boleh PC rumah, laptop, atau VPS Windows. PowerShell biasa (BUKAN CMD!). Klik tombol copy biar aman."
           >
+            {/* Visual instruction first */}
+            <ol className="bg-slate-900/40 border border-slate-700/50 rounded-lg p-3 text-[11px] text-slate-300 leading-relaxed list-decimal pl-5 space-y-1.5 mb-3">
+              <li>Di PC tujuan, klik tombol <span className="font-bold text-slate-100">Start</span> Windows → ketik <span className="font-mono bg-slate-800 px-1.5 rounded">PowerShell</span> → Enter</li>
+              <li>Click kanan tombol copy di kotak code di bawah → seluruh script ke clipboard</li>
+              <li>Di PowerShell window, click kanan → paste → Enter sekali</li>
+              <li>Tunggu 3-5 menit. Auto install Python, Git, daemon. Window PowerShell akan tetap kebuka — itu daemon-nya jalan</li>
+            </ol>
+
             <div className="flex items-center gap-2 mb-2">
               <button
                 onClick={() => setShowSecrets(!showSecrets)}
@@ -268,73 +308,152 @@ export default function DaemonPage() {
                 {showSecrets ? <EyeOff size={11} /> : <Eye size={11} />}
                 {showSecrets ? 'sembunyikan' : 'tampilkan'} kredensial di tampilan
               </button>
-              <p className="text-[10px] text-emerald-400">✓ Copy selalu pake key asli</p>
+              <p className="text-[10px] text-emerald-400">✓ Tombol copy selalu pakai key asli</p>
             </div>
             <CodeBlock displayCode={installScriptDisplay} copyCode={installScriptCopy} multiline />
-            <div className="mt-2 flex items-center gap-1.5 text-[10px] text-slate-500">
-              <Key size={10} />
-              <span>
-                Worker ID auto-generate per install (UUID). Kalau lo install di 2 PC, masing-masing jadi worker beda.
-              </span>
-            </div>
           </Section>
 
+          {/* STEP 3: Verification */}
           <Section
-            title="Yang dilakukan script"
-            sub="Untuk transparansi — script-nya sudah open source di repo daemon/."
+            title="Langkah 3 · Verifikasi daemon udah jalan"
+            sub="Tunggu 1-2 menit setelah Step 2 selesai. Daemon perlu fetch data + run cycle pertama."
           >
-            <ol className="text-[11px] text-slate-400 list-decimal pl-5 space-y-1 leading-relaxed">
-              <li>Bypass execution policy (per-process)</li>
-              <li>Cek Python 3.13 + Git, auto-install via winget kalau belum ada</li>
-              <li>Clone <span className="font-mono text-slate-300">github.com/proreyhanwijaya111/yeehee</span> ke <span className="font-mono text-slate-300">$HOME\yeehee-daemon</span></li>
-              <li>Setup Python venv + install <span className="font-mono">daemon/requirements.txt</span></li>
-              <li>Tulis <span className="font-mono">.env</span> dengan kredensial Supabase</li>
-              <li>Run <span className="font-mono">python -m daemon.main</span> di window aktif</li>
+            <ol className="text-[11px] text-slate-400 list-decimal pl-5 space-y-1.5 leading-relaxed">
+              <li>Refresh halaman ini (pull-down di mobile, atau F5 di laptop)</li>
+              <li>Lihat status pill di paling atas:
+                <ul className="list-none pl-2 mt-1 space-y-0.5">
+                  <li>🟢 <span className="text-emerald-400 font-semibold">Daemon online</span> = berhasil, lo sudah selesai</li>
+                  <li>🟡 <span className="text-amber-400 font-semibold">Daemon offline</span> = belum push, tunggu 1 menit lagi</li>
+                </ul>
+              </li>
+              <li>Buka <Link href="/signals" className="text-sky-300 underline">/signals</Link> di app — signal harus muncul dengan timestamp recent</li>
             </ol>
+
+            <details className="mt-3 bg-slate-900/40 rounded-lg border border-slate-800">
+              <summary className="px-3 py-2 cursor-pointer text-[11px] text-slate-300 font-semibold">
+                Kalau masih offline setelah 5 menit
+              </summary>
+              <div className="px-3 pb-3 text-[10px] text-slate-400 leading-relaxed space-y-1.5">
+                <p>Cek di window PowerShell yang masih kebuka — apakah ada error merah?</p>
+                <p>Common errors + fix:</p>
+                <ul className="list-disc pl-4 space-y-1">
+                  <li><span className="font-mono">[fatal] SUPABASE_URL...</span> = .env corrupt, run installer ulang</li>
+                  <li><span className="font-mono">no LLM credential</span> = OpenRouter key salah, buka openrouter.ai/keys → cek key valid</li>
+                  <li><span className="font-mono">winget tidak ditemukan</span> = manual install Python 3.11+ dari python.org dulu</li>
+                  <li><span className="font-mono">git command not found</span> = manual install Git dari git-scm.com</li>
+                </ul>
+              </div>
+            </details>
           </Section>
 
-          <Section
-            title="Verifikasi"
-            sub="Setelah daemon jalan, refresh halaman ini. Status di atas akan jadi 🟢 ONLINE dalam 1-2 menit."
-          >
-            <p className="text-[11px] text-slate-400">
-              Window PowerShell akan tetap kebuka — itu daemon-nya jalan. Untuk auto-start saat boot Windows (ga perlu PowerShell window terus kebuka), lihat tab <span className="font-bold">Auto-start</span>.
-            </p>
-            <p className="text-[11px] text-amber-400 mt-2">
-              ⚠️ Daemon ini terisolasi dari Mira WA Worker — folder beda (<span className="font-mono">yeehee-daemon</span> vs <span className="font-mono">mira-wa-worker</span>), port beda (3031 vs 3030), proses beda. Aman jalan barengan.
-            </p>
-          </Section>
+          {/* Notes */}
+          <div className="bg-slate-900/40 border border-slate-800 rounded-xl p-3 text-[10px] text-slate-500 leading-relaxed space-y-1.5">
+            <p className="text-slate-300 font-semibold">Catatan penting:</p>
+            <p>• Window PowerShell harus tetap kebuka biar daemon jalan. Tutup window = daemon stop.</p>
+            <p>• Untuk auto-start saat boot (ga perlu PowerShell terus kebuka), lihat tab <span className="font-bold text-slate-300">Auto-start</span>.</p>
+            <p>• Worker ID auto-generate per install. Kalo lo install di 2 PC, masing-masing punya worker_id beda — keduanya bakal muncul di "Workers aktif" di atas.</p>
+          </div>
         </>
       )}
 
       {activeTab === 'update' && (
         <>
+          <div className="bg-sky-950/30 border border-sky-800/40 rounded-xl p-3.5 text-[11px] leading-relaxed">
+            <p className="text-sky-100 font-semibold mb-1">Update daemon ke versi terbaru</p>
+            <p className="text-sky-200/80">
+              Jalankan kalau ada commit baru di repo (e.g. fitur baru, bug fix). Cukup di PC tempat daemon udah ter-install.
+            </p>
+          </div>
+
           <Section
-            title="Update daemon (pull versi terbaru)"
-            sub="Jalankan ini di folder yeehee yang sudah ter-install."
+            title="Langkah 1 · Stop daemon yang lama"
+            sub="Daemon process di memory harus di-kill biar code baru ke-load."
+          >
+            <CodeBlock multiline code={`Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" |
+    Where-Object { $_.CommandLine -like "*daemon.main*" } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force }`} />
+            <p className="text-[10px] text-slate-500 mt-2">
+              Output: kalo ada baris <span className="font-mono">"PID killed"</span> = success. Kalau kosong = ga ada daemon python yang running, lanjut Step 2.
+            </p>
+          </Section>
+
+          <Section
+            title="Langkah 2 · Pull code baru + restart"
           >
             <CodeBlock code={updateScript} multiline />
+            <p className="text-[10px] text-slate-500 mt-2">
+              Daemon akan re-start dengan code latest. Cek log baris pertama harus muncul <span className="font-mono">"yeehee daemon v1.0.0"</span>.
+            </p>
+          </Section>
+
+          <Section
+            title="Langkah 3 · Verifikasi"
+          >
+            <p className="text-[11px] text-slate-400">
+              Refresh halaman ini → status pill harus tetap 🟢 online + timestamp signal terbaru.
+            </p>
           </Section>
         </>
       )}
 
       {activeTab === 'service' && (
         <>
+          <div className="bg-amber-950/30 border border-amber-800/40 rounded-xl p-3.5 text-[11px] leading-relaxed">
+            <p className="text-amber-100 font-semibold mb-1">Auto-start daemon saat Windows boot</p>
+            <p className="text-amber-200/80">
+              Tanpa ini: lo harus run installer manual setiap kali PC restart. Dengan ini: daemon auto-start setiap kali Windows hidup, ga perlu login dulu.
+            </p>
+            <p className="text-amber-200/70 mt-2">
+              <span className="font-semibold">⚠️ Butuh PowerShell sebagai Administrator</span>. Klik kanan PowerShell → Run as Administrator.
+            </p>
+          </div>
+
           <Section
-            title="Auto-start saat boot Windows (NSSM)"
-            sub="Pakai NSSM untuk register daemon sebagai Windows service — auto-start saat PC nyala."
+            title="Langkah 1 · Buka PowerShell sebagai Administrator"
+            sub="Click Start → ketik PowerShell → klik kanan → Run as Administrator. Window judulnya akan ada 'Administrator: Windows PowerShell'."
           >
-            <CodeBlock displayCode={serviceScriptDisplay} copyCode={serviceScriptCopy} multiline />
-            <p className="text-[10px] text-slate-500 mt-2">
-              Cara kerja: NSSM bikin Windows Service yang panggil `python daemon.py` saat boot. Service tetap jalan meski tidak login.
+            <p className="text-[11px] text-slate-400">
+              Kalau muncul UAC popup ("Allow this app to make changes?") → klik <span className="font-bold text-slate-200">Yes</span>.
             </p>
           </Section>
 
           <Section
-            title="Stop / restart service"
-            sub="Pakai PowerShell sebagai administrator."
+            title="Langkah 2 · Copy + run script di bawah"
           >
-            <CodeBlock code="net stop yeehee-daemon`nnet start yeehee-daemon" multiline />
+            <CodeBlock displayCode={serviceScriptDisplay} copyCode={serviceScriptCopy} multiline />
+            <p className="text-[10px] text-slate-500 mt-2">
+              Script ini install NSSM (tool buat bikin Windows Service), register daemon-nya, lalu start service. Total ~3-5 menit.
+            </p>
+          </Section>
+
+          <Section
+            title="Langkah 3 · Test setelah PC restart"
+          >
+            <ol className="text-[11px] text-slate-400 list-decimal pl-5 space-y-1.5">
+              <li>Restart Windows lo</li>
+              <li>Tanpa login, daemon udah jalan di background</li>
+              <li>Refresh halaman ini setelah login → status 🟢 online</li>
+            </ol>
+          </Section>
+
+          <Section
+            title="Stop / Start / Restart service"
+            sub="Pakai PowerShell sebagai Administrator."
+          >
+            <div className="space-y-2">
+              <div>
+                <p className="text-[10px] text-slate-500 mb-1 font-semibold">Stop:</p>
+                <CodeBlock code="net stop yeehee-signal-daemon" />
+              </div>
+              <div>
+                <p className="text-[10px] text-slate-500 mb-1 font-semibold">Start:</p>
+                <CodeBlock code="net start yeehee-signal-daemon" />
+              </div>
+              <div>
+                <p className="text-[10px] text-slate-500 mb-1 font-semibold">Cek status:</p>
+                <CodeBlock code="Get-Service yeehee-signal-daemon" />
+              </div>
+            </div>
           </Section>
         </>
       )}

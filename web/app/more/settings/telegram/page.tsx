@@ -1,9 +1,8 @@
 'use client'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { ArrowLeft, Send, Check, X, Loader2 } from 'lucide-react'
-
-const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
+import { getAppSettings, updateAppSettings } from '@/lib/settings'
 
 async function verifyToken(token: string) {
   const r = await fetch(`https://api.telegram.org/bot${token}/getMe`)
@@ -60,16 +59,24 @@ export default function TelegramSettingsPage() {
     } finally { setSending(false) }
   }
 
+  // Load existing values on mount
+  useEffect(() => {
+    getAppSettings().then(s => {
+      if (s.telegram_bot_token) setToken(s.telegram_bot_token)
+      if (s.telegram_chat_id) setChatId(s.telegram_chat_id)
+    }).catch(() => {})
+  }, [])
+
   const handleSave = async () => {
     setSaving(true); setSaveMsg('')
     try {
-      const r = await fetch(`${API}/api/config/telegram`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token, chat_id: chatId }),
+      const ok = await updateAppSettings({
+        telegram_bot_token: token,
+        telegram_chat_id: chatId,
+        enable_telegram_push: true,
       })
-      if (!r.ok) throw new Error(await r.text())
-      setSaveMsg('Disimpan. Daemon akan auto-pickup di refresh berikutnya.')
+      if (!ok) throw new Error('Gagal save ke Supabase. Cek migration 009 sudah di-apply.')
+      setSaveMsg('Disimpan ke Supabase. Daemon akan auto-pickup di cycle berikutnya.')
     } catch (e: unknown) {
       setSaveMsg(`Error: ${e instanceof Error ? e.message : 'Gagal simpan'}`)
     } finally { setSaving(false) }
@@ -91,25 +98,50 @@ export default function TelegramSettingsPage() {
       </header>
 
       <div className="space-y-5">
+        {/* Tutorial intro */}
+        <div className="bg-emerald-950/30 border border-emerald-800/40 rounded-xl p-3.5 text-[11px] leading-relaxed">
+          <p className="text-emerald-100 font-semibold mb-1.5">Apa ini buat?</p>
+          <p className="text-emerald-200/80 mb-2">
+            Setup biar lo dapet <span className="font-bold">notifikasi instant di HP</span> via Telegram setiap kali sistem detect signal STRONG (confidence tinggi). Total waktu setup: ~3 menit. Gratis, ga perlu bayar Telegram apapun.
+          </p>
+          <p className="text-emerald-200/70">
+            <span className="font-semibold">Yang lo butuh siapin</span>: HP dengan Telegram. Itu aja.
+          </p>
+        </div>
+
         {/* Step 1 */}
-        <Group title="Langkah 1 - buat bot Telegram">
+        <Group title="Langkah 1 · Bikin bot Telegram baru (di HP lo)">
           <div className="px-3.5 py-3 text-[11px] text-slate-400 leading-relaxed">
-            <ol className="list-decimal pl-4 space-y-1">
-              <li>Buka Telegram, cari <strong className="text-slate-200">@BotFather</strong></li>
-              <li>Ketik <code className="bg-slate-900/60 px-1.5 py-0.5 rounded font-mono">/newbot</code></li>
-              <li>Ikuti petunjuk → dapatkan <strong className="text-slate-200">Token</strong></li>
-              <li>Buka bot lo → klik <strong className="text-slate-200">Start</strong></li>
+            <ol className="list-decimal pl-4 space-y-1.5">
+              <li>Buka Telegram di HP, di search bar ketik <strong className="text-slate-200">@BotFather</strong> → pilih yang ada centang biru</li>
+              <li>Tap <strong className="text-slate-200">START</strong> di chat BotFather</li>
+              <li>Kirim pesan: <code className="bg-slate-900/60 px-1.5 py-0.5 rounded font-mono">/newbot</code></li>
+              <li>BotFather minta nama: ketik bebas (e.g. <span className="font-mono">yeehee Signal</span>)</li>
+              <li>BotFather minta username: ketik nama unik akhiran <span className="font-mono">_bot</span> (e.g. <span className="font-mono">yeehee_signal_bot</span>). Kalau nama udah dipake, coba variasi.</li>
+              <li>BotFather kirim pesan dengan <span className="font-bold text-amber-300">token</span>. Format: <span className="font-mono text-[10px]">1234567890:AAH...</span> Copy itu.</li>
+              <li>BotFather kasih link bot lo (<span className="font-mono">t.me/...</span>). Tap → buka chat dengan bot lo → tap <strong className="text-slate-200">START</strong>. (Penting! Tanpa start, bot ga bisa kirim ke lo.)</li>
             </ol>
           </div>
         </Group>
 
         {/* Step 2 */}
-        <Group title="Langkah 2 - masukkan kredensial">
+        <Group title="Langkah 2 · Dapetin Chat ID lo">
           <div className="px-3.5 py-3 space-y-3">
-            <div className="bg-slate-900/40 rounded-lg px-3 py-2 text-[11px] text-slate-500 leading-relaxed border border-slate-800">
-              <p className="font-semibold text-slate-300 mb-1">Cara dapatkan Chat ID:</p>
-              <p>Buka <code className="font-mono break-all">api.telegram.org/bot&lt;TOKEN&gt;/getUpdates</code></p>
-              <p className="mt-1">Cari <code className="font-mono">&quot;id&quot;:</code> di dalam <code className="font-mono">&quot;chat&quot;</code></p>
+            <div className="bg-slate-900/40 rounded-lg px-3 py-2 text-[11px] text-slate-400 leading-relaxed border border-slate-800">
+              <p className="font-semibold text-slate-200 mb-1.5">Cara paling mudah (lewat bot):</p>
+              <ol className="list-decimal pl-4 space-y-1">
+                <li>Di Telegram, search <strong className="text-slate-200">@userinfobot</strong></li>
+                <li>Tap <strong className="text-slate-200">START</strong></li>
+                <li>Bot reply dengan info lo, copy angka di field <code className="font-mono">Id:</code> (e.g. <span className="font-mono">123456789</span>)</li>
+              </ol>
+
+              <details className="mt-2">
+                <summary className="text-slate-300 font-semibold cursor-pointer">Cara alternatif (lewat browser)</summary>
+                <p className="mt-1 text-[10px]">Buka URL ini di browser, ganti <span className="font-mono">&lt;TOKEN&gt;</span> dengan token lo:</p>
+                <p className="mt-1"><code className="font-mono break-all bg-slate-950 px-1.5 py-0.5 rounded">api.telegram.org/bot&lt;TOKEN&gt;/getUpdates</code></p>
+                <p className="mt-1">Cari <code className="font-mono">&quot;id&quot;:</code> di dalam object <code className="font-mono">&quot;chat&quot;</code> (bukan "from"). Itu Chat ID lo.</p>
+                <p className="mt-1 text-amber-400">Note: harus chat ke bot dulu (Step 1 #7) biar getUpdates ada hasil.</p>
+              </details>
             </div>
 
             <Field label="Bot Token">

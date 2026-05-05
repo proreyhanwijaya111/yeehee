@@ -19,6 +19,13 @@ export type AppSettings = {
   enable_news_blackout: boolean
   enable_mira_worker: boolean
   timeframe_focus: 'all' | 'scalping' | 'intraday' | 'swing'
+  // Multi-PC active-passive lock (migration 007)
+  active_worker_id?: string | null
+  active_claimed_at?: string | null
+  // Telegram push (migration 009)
+  telegram_bot_token?: string | null
+  telegram_chat_id?: string | null
+  enable_telegram_push?: boolean
 }
 
 export type ProviderKey = {

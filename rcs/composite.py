@@ -332,6 +332,66 @@ def _apply_regime_tilt(weights: dict, regime: str | None) -> dict:
     return {k: v / total for k, v in tilted.items()}
 
 
+# Try import ML inference module (graceful fallback if not available)
+import os as _os
+try:
+    from rcs.src.inference import is_model_available, ml_predict
+    _ML_AVAILABLE = True
+except ImportError:
+    _ML_AVAILABLE = False
+
+
+def _try_ml_predict(df_15m: pd.DataFrame | None, df_4h: pd.DataFrame | None,
+                    intermarket: dict | None) -> RCSResult | None:
+    """If trained ML model exists for M15 AND user opted in, use it. Else None.
+
+    OPT-IN GATE: requires env var RCS_USE_ML=1. Default = OFF.
+    Reason: v0.2 ML on 60-day yfinance data has weak edge (~40-43% acc).
+    User should validate model quality on their MT5 data before flipping on.
+
+    Set in .env to enable:
+        RCS_USE_ML=1
+    """
+    if _os.environ.get("RCS_USE_ML", "0").strip() not in ("1", "true", "yes"):
+        return None
+    if not _ML_AVAILABLE or df_15m is None or len(df_15m) == 0:
+        return None
+    if not is_model_available("M15"):
+        return None
+
+    last = df_15m.iloc[-1]
+    # Build feature dict — same name as in training pipeline _expanded_feature_list()
+    features = {}
+    for col in df_15m.columns:
+        try:
+            v = last.get(col)
+            if v is None or (isinstance(v, float) and pd.isna(v)):
+                features[col] = 0.0
+            else:
+                features[col] = float(v) if not isinstance(v, bool) else int(v)
+        except (TypeError, ValueError):
+            features[col] = 0.0
+
+    pred = ml_predict("M15", features)
+    if not pred:
+        return None
+
+    # Build minimal RCSResult from ML prediction. Components show ML diagnostic info.
+    components = [
+        ComponentScore("ml_xgboost", pred["rcs_score"], 1.0,
+                       f"P_long={pred['prob_long']:.3f}, P_short={pred['prob_short']:.3f}, P_neutral={pred['prob_neutral']:.3f}"),
+    ]
+    return RCSResult(
+        rcs_score=pred["rcs_score"],
+        direction=pred["direction"],
+        confidence_pct=pred["confidence_pct"],
+        components=components,
+        top_drivers=[f"ML XGBoost ({pred['model_version']}): P_long={pred['prob_long']:.3f}"],
+        regime="ml-driven",
+        session="ml-driven",
+    )
+
+
 def compute_rcs(
     df_4h:        pd.DataFrame | None,
     df_15m:       pd.DataFrame | None,
@@ -339,6 +399,7 @@ def compute_rcs(
     session:      str | None,
     regime:       str | None,
     custom_weights: dict | None = None,
+    use_ml: bool = True,
 ) -> RCSResult:
     """Compute RCS composite score.
 
@@ -352,7 +413,17 @@ def compute_rcs(
 
     Returns:
         RCSResult with score, direction, confidence, components, top drivers.
+
+    If use_ml=True AND trained M15 model exists, ML inference takes precedence.
+    Heuristic v0.1 used as fallback if no model OR use_ml=False.
     """
+    # Try ML first — preferred when available (Phase v0.2)
+    if use_ml:
+        ml_result = _try_ml_predict(df_15m, df_4h, intermarket)
+        if ml_result is not None:
+            return ml_result
+
+    # Heuristic v0.1 fallback
     base_weights = custom_weights or DEFAULT_WEIGHTS
     weights = _apply_regime_tilt(base_weights, regime)
 

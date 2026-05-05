@@ -26,9 +26,24 @@ from ai_agent.orchestrator import (
 try:
     from rcs.composite import compute_rcs
     from rcs.persistence import push_rcs_signal
+    from rcs.outcome_tracker import evaluate_pending_signals as rcs_evaluate_outcomes
     RCS_AVAILABLE = True
 except ImportError:
     RCS_AVAILABLE = False
+
+# Drift detector (Phase v0.3, opt-in via training reference snapshot)
+try:
+    from rcs.src.drift_detector import quick_drift_check
+    DRIFT_AVAILABLE = True
+except ImportError:
+    DRIFT_AVAILABLE = False
+
+# Telegram push — optional, configured via env or app_settings
+try:
+    from notify.push import maybe_push_signal
+    TG_PUSH_AVAILABLE = True
+except ImportError:
+    TG_PUSH_AVAILABLE = False
 
 
 def run_once(store: SettingsStore, settings: dict, log=print, trigger_reason: str = "scheduled") -> dict:
@@ -240,6 +255,40 @@ def run_once(store: SettingsStore, settings: dict, log=print, trigger_reason: st
         except Exception as e:
             log(f"[tracker] update phase error: {e!r}")
             traceback.print_exc()
+
+        # ── RCS outcome tracker: evaluate pending rcs_signals ─────────────
+        # Marks TP1_HIT/TP2_HIT/SL_HIT/EXPIRED on any pending signals based
+        # on price action since signal was generated. Critical for v0.2 ML
+        # training data + accuracy metrics on /more/rcs-monitor.
+        if RCS_AVAILABLE:
+            try:
+                outcomes_modified = rcs_evaluate_outcomes(store, df_5m, log=log)
+                if outcomes_modified > 0:
+                    log(f"[outcome] evaluated {outcomes_modified} rcs_signals")
+            except Exception as e:
+                log(f"[outcome] evaluation error: {e!r}")
+
+        # ── Telegram push (high-confidence alerts) ────────────────────────
+        # Pushed only when STRONG debate OR strong RCS, with debounce.
+        if TG_PUSH_AVAILABLE:
+            try:
+                push_result = maybe_push_signal(store, bundle, log=log)
+                if push_result.get("pushed"):
+                    log(f"[telegram] pushed: {push_result['reason']}")
+                # else silent (most cycles don't trigger; spam-protected)
+            except Exception as e:
+                log(f"[telegram] push error: {e!r}")
+
+        # ── Drift detection (Phase v0.3) ──────────────────────────────────
+        # Compare live feature distribution vs training reference snapshot.
+        # If severe drift → log warning + indicate retraining needed.
+        if DRIFT_AVAILABLE:
+            try:
+                drift = quick_drift_check(df_15m, tf="M15")
+                if drift and drift.get("level") in ("moderate", "severe"):
+                    log(f"[drift] {drift['level'].upper()} score={drift['score']} max={drift['max_score']} drifted={drift.get('per_feature', {}).keys() if drift['level'] == 'severe' else 'see report'}")
+            except Exception as e:
+                log(f"[drift] check error: {e!r}")
 
         try:
             for style, sig_obj in (("scalper", sig_scalper), ("intraday", sig_intraday), ("swing", sig_swing)):
