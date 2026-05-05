@@ -1,11 +1,25 @@
-﻿.venv/
+.venv/
 __pycache__/
 *.pyc
 *.pyo
+
+# Secrets / env (NEVER commit)
 .env
+.env.local
+.env.*.local
+.env.production
+*.env
+secrets/
+
+# Claude Code local settings (contains command history with API keys + tokens, never share)
+.claude/
+
+# Build artifacts
 data_cache/
 backtest_results/
 .next/
 web/node_modules/
 *.log
 .DS_Store
+.vercel
+*.tsbuildinfo
