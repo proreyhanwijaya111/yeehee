@@ -5,11 +5,11 @@ import { Home, TrendingUp, Calculator, Brain, MoreHorizontal } from 'lucide-reac
 import { cn } from '@/lib/utils'
 
 const NAV = [
-  { href: '/',            label: 'Beranda',   icon: Home },
-  { href: '/signals',     label: 'Sinyal',    icon: TrendingUp },
-  { href: '/calculator',  label: 'Kalkulator',icon: Calculator },
-  { href: '/analysis',    label: 'AI',        icon: Brain },
-  { href: '/more',        label: 'Lainnya',   icon: MoreHorizontal },
+  { href: '/',            label: 'Beranda',    icon: Home },
+  { href: '/signals',     label: 'Sinyal',     icon: TrendingUp },
+  { href: '/calculator',  label: 'Kalkulator', icon: Calculator },
+  { href: '/analysis',    label: 'Analisis',   icon: Brain },
+  { href: '/more',        label: 'Lainnya',    icon: MoreHorizontal },
 ]
 
 export default function BottomNav() {

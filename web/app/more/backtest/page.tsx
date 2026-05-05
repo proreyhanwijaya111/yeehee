@@ -216,6 +216,13 @@ function ResultBlock({ r }: { r: MCBacktestResult }) {
         </div>
       </Group>
 
+      <div className="bg-amber-950/20 border border-amber-900/40 rounded-xl px-3 py-2.5">
+        <p className="text-[11px] text-amber-300 leading-relaxed">
+          ⚠️ <span className="font-semibold">Disclaimer:</span> simulasi pakai bernoulli win/loss + uniform noise.
+          Belum model tail events (NFP/FOMC spike) atau streak regime — hasil cenderung optimistic.
+          Real gold returns fat-tailed. Pakai sebagai sanity check, bukan precise prediction.
+        </p>
+      </div>
       <p className="text-[10px] text-slate-500 text-center">
         {r.n_runs.toLocaleString()} simulasi · {r.duration_ms}ms · Vercel Edge
       </p>
