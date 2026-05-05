@@ -1,9 +1,16 @@
-"""Intermarket: XAU vs DXY, US10Y, real yields (TIPS proxy), VIX, SPX.
-XAU drivers (urutan importance):
-1. US Real yields (TIPS, inverse) — corr ~ -0.85
-2. DXY — corr -0.7 to -0.9
-3. VIX (risk-off boost) — variable
-4. SPX (risk-on diluter) — mild
+"""Intermarket: XAU vs DXY, US10Y, TIPS (real yields), VIX, SPX, silver.
+
+XAU drivers (in order of predictive power):
+1. TIPS (real yield ETF, INVERSE corr -0.85) — TIP up = real yields down = gold up.
+2. DXY (dollar index, INVERSE corr -0.7 to -0.9)
+3. US10Y nominal yield (INVERSE)
+4. VIX (risk-off boost — variable, regime-dependent)
+5. SPX (risk-on diluter — mild)
+6. Gold/Silver ratio (extreme = mean-revert)
+
+IMPROVEMENT #2: TIPS added with highest weight. Real yields are the
+#1 macro driver of gold. Without TIPS, intermarket score loses its
+single most informative component.
 """
 from __future__ import annotations
 from typing import Dict, Optional
@@ -65,7 +72,20 @@ def intermarket_score(bundle: Dict[str, pd.DataFrame]) -> dict:
             components["us10y"] = {
                 "value": float(y_chg),
                 "score": float(-np.tanh(y_chg * 50)),
-                "note": f"US10Y 5-bar Δ {y_chg*100:+.2f}%",
+                "note": f"US10Y 5-bar d {y_chg*100:+.2f}%",
+            }
+
+    # 2b. IMPROVEMENT #2: TIPS (real yield proxy) — corr ~-0.85 to gold.
+    # When TIP ETF rises, real yields fall, gold rallies. Direct (not inverse) correlation.
+    # This is the SINGLE most predictive macro driver of gold long-term.
+    if "tip" in closes.columns:
+        tip_chg = closes["tip"].pct_change(5).iloc[-1]
+        if pd.notna(tip_chg):
+            components["tip"] = {
+                "value": float(tip_chg),
+                # tip up = real yields down = gold up. POSITIVE correlation, not inverse.
+                "score": float(np.tanh(tip_chg * 80)),  # higher sensitivity than DXY
+                "note": f"TIPS 5-bar d {tip_chg*100:+.2f}% (real yields proxy, gold corr ~-0.85)",
             }
 
     # 3. VIX spike → bullish XAU (risk-off)
@@ -103,9 +123,18 @@ def intermarket_score(bundle: Dict[str, pd.DataFrame]) -> dict:
     if not components:
         return {"score": 0.0, "components": {}, "note": "no intermarket data"}
 
-    weights = {"dxy": 0.30, "us10y": 0.30, "vix": 0.20, "spx": 0.10, "gold_silver": 0.10}
-    weighted = sum(c["score"] * weights.get(name, 0.1) for name, c in components.items())
-    total_w = sum(weights.get(name, 0.1) for name in components)
+    # IMPROVEMENT #2: TIPS gets highest weight (real yields = #1 gold driver historically).
+    # Weights reweighted to make TIPS dominant when available, fall back gracefully when not.
+    weights = {
+        "tip":         0.35,   # NEW — real yield, single most predictive driver
+        "dxy":         0.25,
+        "us10y":       0.20,   # nominal yield (kurang dari TIPS dalam predictive power)
+        "vix":         0.10,
+        "spx":         0.05,
+        "gold_silver": 0.05,
+    }
+    weighted = sum(c["score"] * weights.get(name, 0.05) for name, c in components.items())
+    total_w = sum(weights.get(name, 0.05) for name in components)
     score = weighted / total_w if total_w else 0.0
 
     return {

@@ -16,6 +16,8 @@ from ai_agent.agents import (
     run_pipeline, synthesize, SynthResult,
     build_htf_context, build_ltf_context, build_smc_context,
     build_intermarket_context, build_cot_context, build_news_context,
+    extract_htf_numeric, extract_ltf_numeric, extract_smc_numeric,
+    extract_intermarket_numeric, extract_cot_numeric, extract_news_numeric,
 )
 from ai_agent.rule_engine import debate as rule_debate, AgentVerdict, DebateResult
 
@@ -265,11 +267,27 @@ def build_market_context(
     in_blackout: bool, blackout_event, upcoming_events: list,
     timeframe_focus: str = "intraday",
 ) -> dict:
+    """Build market context for LLM agents.
+
+    IMPROVEMENT #1 — now includes BOTH:
+      - structured numerical dicts (*_numeric) for hallucination-resistant prompts
+      - legacy text (*_text) for backward compat + readability
+
+    Both are passed to agents; system prompts instruct them to PREFER JSON over text.
+    """
     return {
         "price":     float(df_15m["close"].iloc[-1]) if df_15m is not None and len(df_15m) else 0.0,
         "session":   session,
         "regime":    regime,
         "timeframe_focus": timeframe_focus,
+        # Structured numerical (NEW — primary signal)
+        "htf_numeric":   extract_htf_numeric(df_4h),
+        "ltf_numeric":   extract_ltf_numeric(df_15m, tf_label="M15"),
+        "smc_numeric":   extract_smc_numeric(df_15m),
+        "inter_numeric": extract_intermarket_numeric(intermarket or {}),
+        "cot_numeric":   extract_cot_numeric(cot or {}),
+        "news_numeric":  extract_news_numeric(in_blackout, blackout_event, upcoming_events or []),
+        # Legacy text (back-compat)
         "htf_text":  build_htf_context(df_4h),
         "ltf_text":  build_ltf_context(df_15m),
         "smc_text":  build_smc_context(df_15m),

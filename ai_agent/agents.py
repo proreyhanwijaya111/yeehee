@@ -125,30 +125,28 @@ AGENT_LABELS = {
 
 SYS_HTF_BIAS = """You are a senior Higher-Timeframe Bias Specialist for XAU/USD (gold), trained at a tier-1 hedge fund.
 
+INPUT: You receive a `htf_data` JSON object with raw numerical fields (close, ema9, ema21, ema50, ema200, rsi14, adx14, atr14, atr_ratio_vs_avg20, swing_high_20, swing_low_20, bullish_stack, bearish_stack). USE THESE NUMBERS DIRECTLY — do not invent values.
+
 Your single job: determine the structural bias on H1/H4. You do NOT call entries.
 
 Multi-EMA hierarchy (PRIMARY signal, weighted highest):
-- EMA8 > EMA21 > EMA50 > EMA200 on H4 = strong bullish stack -> LONG bias 0.75-0.95.
-- EMA8 < EMA21 < EMA50 < EMA200 = strong bearish stack -> SHORT bias 0.75-0.95.
-- Stack rotating (e.g. EMA8 > 21 > 50 but < 200) = early reversal -> FLAT 0.4-0.6 with note.
+- htf_data.bullish_stack=true (ema9>ema21>ema50>ema200) -> LONG bias 0.75-0.95.
+- htf_data.bearish_stack=true (ema9<ema21<ema50<ema200) -> SHORT bias 0.75-0.95.
+- Partial stack (e.g. ema9>ema21>ema50 but <ema200) = early reversal -> FLAT 0.4-0.6.
 - Mixed (no clean stack) = FLAT 0.2.
 
 Trend strength filter (REQUIRED):
-- ADX > 25 + stack aligned = strong trend, full confidence.
-- ADX 20-25 = developing trend, haircut 20% confidence.
-- ADX < 20 = ranging. Bias is unreliable -> FLAT 0.3.
-
-Major swing structure:
-- Recent BOS (Break of Structure) up + EMA stack bullish = high-conviction LONG.
-- Recent BOS down + bearish stack = high-conviction SHORT.
-- Inside prior range without BOS = FLAT.
+- htf_data.adx14 > 25 + stack aligned = strong trend, full confidence.
+- htf_data.adx14 in [20, 25] = developing trend, haircut 20% confidence.
+- htf_data.adx14 < 20 = ranging. Bias is unreliable -> FLAT 0.3.
 
 Reject the verdict (force FLAT) if:
-- Price within 0.3% of major H4 swing high/low (overextended risk)
-- ATR(14) > 2x its 20-period average (volatility regime change)
+- abs(close - swing_high_20)/close < 0.003 with bullish stack (overextended LONG risk)
+- abs(close - swing_low_20)/close < 0.003 with bearish stack (overextended SHORT risk)
+- htf_data.atr_ratio_vs_avg20 > 2.0 (volatility regime change, signal noise)
 
 Output STRICT JSON, no markdown:
-{"verdict":"LONG|SHORT|FLAT","confidence":0..1,"reason":"<concise sentence with specific numbers>","key_levels":{"support":<float>,"resistance":<float>}}"""
+{"verdict":"LONG|SHORT|FLAT","confidence":0..1,"reason":"<reference specific numbers from htf_data>","key_levels":{"support":<float>,"resistance":<float>}}"""
 
 SYS_SESSION_PHASE = """You are a Session Phase Specialist for XAU/USD with deep institutional flow knowledge.
 
@@ -172,75 +170,63 @@ Output STRICT JSON: {"verdict":"LONG|SHORT|FLAT","confidence":0..1,"reason":"<se
 
 SYS_LTF_TECHNICAL = """You are a Lower-Timeframe Technical Analyst for XAU/USD specializing in M5/M15 entries.
 
-Indicators (in priority order):
-1. EMA stack (M5/M15: 9 / 21 / 50): direction confirmation
-2. RSI(14): momentum + divergence detection
-3. MACD: histogram acceleration
-4. ADX + DI: trend strength + dominance
-5. Bollinger Band % (bb_pctb): mean reversion zones
-6. Recent candle pattern: engulfing, pinbar, inside bar
+INPUT: You receive `ltf_data` JSON (close, ema9, ema21, ema50, rsi14, macd_hist, adx14, plus_di, minus_di, bb_pctb, atr14, candle_body_pct_of_range, prev_close) and `htf_data` for HTF alignment. Use raw numbers.
 
 Multi-timeframe alignment (MANDATORY):
-- Your trigger MUST align with HTF bias provided in context.
-- HTF bullish + LTF bullish setup = LONG.
-- HTF bearish + LTF bearish setup = SHORT.
+- Your trigger MUST align with htf_data bias.
+- HTF bullish_stack=true + LTF bullish setup = LONG.
+- HTF bearish_stack=true + LTF bearish setup = SHORT.
 - HTF and LTF disagree -> verdict = FLAT, regardless of LTF strength.
 
-Trigger conditions for LONG (need 3+ confluence):
-- EMA9 > EMA21 with positive MACD histogram
-- RSI between 50-70 (not overbought)
-- Last 1-2 candles bullish with body > 60% range
-- ADX > 20 with +DI > -DI
+Trigger conditions for LONG (need 3+ confluence from ltf_data):
+- ema9 > ema21 AND macd_hist > 0
+- rsi14 in [50, 70]
+- candle_body_pct_of_range > 0.6 (clean directional candle)
+- adx14 > 20 AND plus_di > minus_di
 - bb_pctb > 0.5 (price in upper half of band)
-- Bullish divergence on RSI vs price (rare but high-quality)
 
-Trigger conditions for SHORT (mirror): EMA9 < EMA21, MACD negative, RSI 30-50, bearish candles, +DI < -DI.
+Trigger conditions for SHORT (mirror): ema9 < ema21, macd_hist < 0, rsi14 in [30,50], candle_body_pct_of_range > 0.6, plus_di < minus_di.
 
 Reject (force FLAT) if:
-- RSI > 75 (overbought, chasing risk) for LONG
-- RSI < 25 (oversold, capitulation risk) for SHORT
-- Last candle range > 1.5x ATR (volatility spike, wait)
+- rsi14 > 75 with consensus LONG (overbought, chasing risk)
+- rsi14 < 25 with consensus SHORT (oversold, capitulation chase)
+- candle_range > 1.5 * atr14 (volatility spike, wait)
 
-Output STRICT JSON: {"verdict":"LONG|SHORT|FLAT","confidence":0..1,"reason":"<3+ confluence factors named>"}"""
+Output STRICT JSON: {"verdict":"LONG|SHORT|FLAT","confidence":0..1,"reason":"<list 3+ specific numbers from ltf_data>"}"""
 
 SYS_LIQUIDITY_SMC = """You are a Smart Money Concepts (SMC) Specialist for XAU/USD with proven 2024-26 institutional flow track record.
 
-Concepts you actively monitor:
-- Liquidity Sweeps: price spike beyond equal highs/lows then reversal (institutional stop hunt)
-- Fair Value Gaps (FVG): 3-candle imbalance where mid candle leaves a gap. Bullish FVG = price likely returns to fill from above.
-- Order Blocks (OB): last opposite candle before strong move, often retested
-- Breaker Blocks: failed OB that flips to opposite direction
-- Mitigation Blocks: refined OB after partial fill
-- Equal Highs/Lows: clusters of stops above/below = liquidity targets
+INPUT: smc_data JSON contains booleans (bull_sweep_recent5, bear_sweep_recent5, fvg_bull_recent5, fvg_bear_recent5, bos_up, bos_dn) and floats (prior_swing_high, prior_swing_low, fvg_bull_top, fvg_bull_bot). Read these directly.
 
 Bullish setups (verdict LONG):
-- Sweep below recent swing low (stop hunt) + immediate close above swept level
-- Bullish FVG below current price still unfilled (price may revisit then continue up)
-- Bullish OB tested + held + price advancing
-- Multiple equal highs above = liquidity pool target
+- bull_sweep_recent5=true (stop hunt below prior swing low) + price closing back above prior_swing_low
+- fvg_bull_recent5=true with active fvg_bull_top/bot below current price
+- bos_up=true (break of structure up confirmed)
+- 2+ of above = high confidence
 
-Bearish setups (mirror).
+Bearish setups (mirror): bear_sweep_recent5, fvg_bear_recent5, bos_dn.
 
 FLAT conditions:
-- No recent sweep (last 5-10 candles uneventful)
-- Price already filled all major FVGs
-- No untapped liquidity zones
+- All booleans false
+- No fvg levels in smc_data (data unavailable)
 
-Confidence scoring:
-- Single SMC factor = 0.5-0.6
-- 2 confluence (e.g. sweep + FVG return) = 0.7-0.8
-- 3+ confluence (sweep + FVG + OB respected) = 0.85-0.95
+Confidence scoring (count active concepts):
+- 1 SMC factor = 0.5-0.6
+- 2 confluence (e.g. sweep + fvg) = 0.7-0.8
+- 3+ confluence (sweep + fvg + bos) = 0.85-0.95
 
-Output STRICT JSON: {"verdict":"LONG|SHORT|FLAT","confidence":0..1,"reason":"<specific SMC concepts active>","key_levels":{"swept_low":<float>,"untapped_liquidity":<float>}}"""
+Output STRICT JSON: {"verdict":"LONG|SHORT|FLAT","confidence":0..1,"reason":"<specific SMC concepts active with values>","key_levels":{"swept_low":<float>,"untapped_liquidity":<float>}}"""
 
 SYS_ORDER_FLOW = """You are an Order Flow / Positioning Specialist for XAU/USD with deep COT and tape-reading expertise.
 
-COT (Commitment of Traders) report rules:
-- Managed Money (hedge fund) net long z-score > +1.5 = extreme long crowding -> mean-revert SHORT bias 0.7
-- z-score > +2.0 = extreme + likely top, SHORT 0.85
-- z-score < -1.5 = extreme short, mean-revert LONG bias 0.7
-- z-score < -2.0 = capitulation, LONG 0.85
-- z-score in [-0.5, +0.5] = normal positioning, signal weak FLAT
+INPUT: cot_data JSON (z_score_52w, regime, net_long, net_short) + intermarket_data (score, dxy, us10y, tip, vix). USE these raw numbers.
+
+COT (Commitment of Traders) rules using cot_data.z_score_52w:
+- > +1.5 = extreme long crowding -> mean-revert SHORT bias 0.7
+- > +2.0 = extreme top -> SHORT 0.85
+- < -1.5 = extreme short -> mean-revert LONG bias 0.7
+- < -2.0 = capitulation -> LONG 0.85
+- in [-0.5, +0.5] = normal -> weak FLAT
 
 Volume / tape analysis:
 - Volume spike (3x average) + close in upper third of range = institutional buying absorption -> LONG
@@ -260,12 +246,14 @@ Output STRICT JSON: {"verdict":"LONG|SHORT|FLAT","confidence":0..1,"reason":"<CO
 
 SYS_NEWS_PROXIMITY = """You are a News Proximity Risk Officer for XAU/USD. Your sole job: VETO trades when high-impact news is imminent.
 
-Block matrix:
-- Event within +/- 15 min = HARD BLOCK -> verdict FLAT, confidence 0.95
-- Event within 30 min = STRONG BLOCK -> FLAT 0.85
-- Event within 60 min = MODERATE BLOCK -> FLAT 0.7
-- Event within 2 hr = ADVISORY -> FLAT 0.5 (let synthesizer haircut)
-- No event in 4 hr = CLEAR -> FLAT 0.0 (no veto, no signal)
+INPUT: news_data JSON contains in_blackout (bool), blackout_event (object or null), next_event (object), minutes_to_next (float — minutes until next high-impact event).
+
+Block matrix (use minutes_to_next):
+- in_blackout=true OR abs(minutes_to_next) < 15 = HARD BLOCK -> FLAT 0.95
+- abs(minutes_to_next) < 30 = STRONG BLOCK -> FLAT 0.85
+- abs(minutes_to_next) < 60 = MODERATE BLOCK -> FLAT 0.7
+- abs(minutes_to_next) < 120 = ADVISORY -> FLAT 0.5
+- minutes_to_next >= 240 OR null = CLEAR -> FLAT 0.0 (no veto)
 
 Critical events for XAU (descending impact):
 1. FOMC rate decision + statement
@@ -370,11 +358,13 @@ Output STRICT JSON: {"verdict":"LONG|SHORT|FLAT","confidence":0..1,"reason":"<n 
 SYS_VOLATILITY = """You are a Volatility / ATR Specialist for XAU/USD with quantitative training (Markov regime + GARCH proxy).
 You assess if current volatility regime supports the requested timeframe strategy.
 
-ATR percentile rules (vs 20-period rolling baseline):
-- ATR < 30th percentile = LOW vol regime. Breakout strategies likely fail. Range strategies favored. Scalping difficult.
-- ATR 30-70th = NORMAL vol. Both trend + range work.
-- ATR 70-90th = HIGH vol. Trend strategies favored. Scalping risky (whipsaws).
-- ATR > 90th percentile = EXTREME vol. Block ALL signals = FLAT 0.9 (likely news event or regime shift).
+INPUT: htf_data.atr_ratio_vs_avg20 (current ATR / 20-period rolling avg ATR), htf_data.bb_width, htf_data.atr14.
+
+ATR ratio rules (atr_ratio_vs_avg20):
+- < 0.5 = LOW vol (quiet). Scalping difficult, range strategies favored.
+- 0.5 to 1.5 = NORMAL vol. Both trend + range work.
+- 1.5 to 2.0 = HIGH vol. Trend strategies favored. Scalping risky.
+- > 2.0 = EXTREME vol -> FLAT 0.9 (likely news event or regime shift).
 
 Spread + liquidity:
 - Spread > 0.05% of price = poor liquidity, FLAT 0.7
@@ -428,31 +418,63 @@ Decision framework (in order):
    - Backtest Memory verdict FLAT (low historical winrate) -> haircut 30% confidence
    - Pattern Recognition verdict FLAT or opposite -> haircut 15%
 
-3. Direction voting (DIRECTIONAL agents only: HTF Bias, Session Phase, LTF Technical, Liquidity/SMC, Order Flow, Pattern Recognition, Volume Profile):
-   - Need >= 4 of 7 agents agreeing on direction (LONG or SHORT)
-   - If <4 agreement -> FLAT (no consensus)
-   - Tally weighted by each agent's confidence
+3. WEIGHTED direction voting (IMPROVEMENT: per-regime weights):
+   - In TRENDING regime: HTF Bias + LTF Technical weighted 1.5x; SMC/VolProfile lower.
+   - In RANGING regime: Liquidity/SMC + Volume Profile + Session Phase weighted 1.5x; HTF lower.
+   - In VOLATILE regime: Order Flow + News + Volatility weighted higher; Technical agents lower.
+   - Compute weighted_score per direction = sum(agent.confidence * regime_weight) for each agent voting that direction.
+   - Choose direction with highest weighted_score IF margin (long-short) >= 0.5 AND winning_score >= 1.5.
+   - Else FLAT.
 
-4. Confidence = weighted avg of agreeing agents' confidence
+4. Confidence = winning_weighted_score / max_possible_weighted_score (i.e. normalized to 0..1)
    - Subtract 0.05 per Devil's Advocate red_flag (max -0.20)
    - Subtract 0.05 if Backtest Memory says FLAT
    - Cap at 0.95
 
 5. Signal strength:
-   - STRONG: confidence >= 0.80 AND >= 5 agents agree
-   - NORMAL: confidence >= 0.65 AND >= 4 agents agree
-   - WEAK: confidence >= 0.50 AND >= 3 agents agree
+   - STRONG: confidence >= 0.80 AND >= 4 agents agree
+   - NORMAL: confidence >= 0.65 AND >= 3 agents agree
+   - WEAK: confidence >= 0.50
    - FLAT: anything else
 
-6. Primary driver = single most influential agent (highest confidence among agreeing).
+6. Primary driver = agent with highest (confidence × regime_weight) among agreeing agents.
 
 Output STRICT JSON:
 {"action":"LONG|SHORT|FLAT","confidence":0..1,"signal_strength":"STRONG|NORMAL|WEAK|FLAT","primary_driver":"<agent name>","reasoning_chain":["<step1>","<step2>","..."],"risks":["..."]}"""
 
 
-# ─── Context Builders (turn pandas DataFrames into LLM-friendly text) ──────────
+# ─── Context Builders ──────────────────────────────────────────────────────────
+# IMPROVEMENT #1 (signal accuracy): build BOTH structured numerical data (JSON)
+# AND legacy text strings. LLMs hallucinate less when given raw values vs prose
+# narrative ("EMA21=4548 → bearish bias"). Agent prompts now embed JSON blob.
+# Text builders kept for backward compat with synthesizer + rule fallback.
+
+NUM_NA = None  # marker for missing/NaN — keeps JSON valid
+
+
+def _safe_float(v) -> Optional[float]:
+    """Coerce to float, returning None on NaN/None/invalid."""
+    if v is None:
+        return None
+    try:
+        if isinstance(v, float) and pd.isna(v):
+            return None
+        f = float(v)
+        if f != f:  # NaN
+            return None
+        return round(f, 4)
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_bool(v) -> bool:
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return False
+    return bool(v)
+
 
 def _last_row_summary(df: pd.DataFrame, fields: list[str]) -> str:
+    """Legacy text summarizer (kept for synthesizer prompt + readability)."""
     if df is None or len(df) == 0:
         return "no data"
     last = df.iloc[-1]
@@ -471,6 +493,204 @@ def _last_row_summary(df: pd.DataFrame, fields: list[str]) -> str:
     return ", ".join(parts) if parts else "no signals"
 
 
+# ── Structured numerical extractors (NEW — improvement #1) ───────────────────
+
+def extract_htf_numeric(df_4h: pd.DataFrame | None) -> dict:
+    """H4/HTF structured numerical snapshot. Used by HTF Bias agent."""
+    if df_4h is None or len(df_4h) < 50:
+        return {"available": False}
+    last = df_4h.iloc[-1]
+    # Per-EMA stack ranking (improvement: agent gets explicit hierarchy)
+    ema8 = _safe_float(last.get("ema8"))   # may be None — only ema9/21/50/200 in technical.add_all
+    ema9 = _safe_float(last.get("ema9"))
+    ema21 = _safe_float(last.get("ema21"))
+    ema50 = _safe_float(last.get("ema50"))
+    ema200 = _safe_float(last.get("ema200"))
+    close = _safe_float(last.get("close"))
+    # Stack alignment
+    bullish_stack = (
+        ema9 is not None and ema21 is not None and ema50 is not None and ema200 is not None
+        and ema9 > ema21 > ema50 > ema200
+    )
+    bearish_stack = (
+        ema9 is not None and ema21 is not None and ema50 is not None and ema200 is not None
+        and ema9 < ema21 < ema50 < ema200
+    )
+    # ATR vs 20-period rolling avg (volatility regime indicator)
+    atr_now = _safe_float(last.get("atr14"))
+    atr_avg20 = _safe_float(df_4h["atr14"].tail(20).mean()) if "atr14" in df_4h.columns else None
+    atr_ratio = (atr_now / atr_avg20) if (atr_now and atr_avg20 and atr_avg20 > 0) else None
+    return {
+        "available": True,
+        "tf": "H4",
+        "close": close,
+        "ema9":  ema9,
+        "ema21": ema21,
+        "ema50": ema50,
+        "ema200": ema200,
+        "rsi14": _safe_float(last.get("rsi14")),
+        "adx14": _safe_float(last.get("adx")),
+        "plus_di": _safe_float(last.get("plus_di")),
+        "minus_di": _safe_float(last.get("minus_di")),
+        "atr14": atr_now,
+        "atr_avg20": atr_avg20,
+        "atr_ratio_vs_avg20": _safe_float(atr_ratio),
+        "bb_upper": _safe_float(last.get("bb_up")),
+        "bb_lower": _safe_float(last.get("bb_low")),
+        "bb_pctb": _safe_float(last.get("bb_pctb")),
+        "bb_width": _safe_float(last.get("bb_width")),
+        "macd_hist": _safe_float(last.get("hist")),
+        "swing_high_20": _safe_float(df_4h["high"].tail(20).max()),
+        "swing_low_20": _safe_float(df_4h["low"].tail(20).min()),
+        "bullish_stack": bullish_stack,
+        "bearish_stack": bearish_stack,
+    }
+
+
+def extract_ltf_numeric(df: pd.DataFrame | None, tf_label: str = "M15") -> dict:
+    """Lower-timeframe (M5/M15) structured snapshot for LTF Technical agent."""
+    if df is None or len(df) < 30:
+        return {"available": False}
+    last = df.iloc[-1]
+    prev = df.iloc[-2] if len(df) >= 2 else last
+    # Last candle anatomy (engulfing/pinbar detection helper)
+    o, h, l, c = (
+        _safe_float(last.get("open")), _safe_float(last.get("high")),
+        _safe_float(last.get("low")),  _safe_float(last.get("close")),
+    )
+    body = abs(c - o) if (c is not None and o is not None) else None
+    rng = (h - l) if (h is not None and l is not None) else None
+    body_pct_of_range = (body / rng) if (body is not None and rng and rng > 0) else None
+    return {
+        "available": True,
+        "tf": tf_label,
+        "open":  o,
+        "high":  h,
+        "low":   l,
+        "close": c,
+        "ema9":  _safe_float(last.get("ema9")),
+        "ema21": _safe_float(last.get("ema21")),
+        "ema50": _safe_float(last.get("ema50")),
+        "rsi14": _safe_float(last.get("rsi14")),
+        "macd_hist": _safe_float(last.get("hist")),
+        "adx14": _safe_float(last.get("adx")),
+        "plus_di":  _safe_float(last.get("plus_di")),
+        "minus_di": _safe_float(last.get("minus_di")),
+        "bb_pctb":  _safe_float(last.get("bb_pctb")),
+        "bb_width": _safe_float(last.get("bb_width")),
+        "atr14":    _safe_float(last.get("atr14")),
+        "stoch_k":  _safe_float(last.get("stoch_k")),
+        "stoch_d":  _safe_float(last.get("stoch_d")),
+        "candle_body": _safe_float(body),
+        "candle_range": _safe_float(rng),
+        "candle_body_pct_of_range": _safe_float(body_pct_of_range),
+        "prev_close": _safe_float(prev.get("close")),
+    }
+
+
+def extract_smc_numeric(df: pd.DataFrame | None) -> dict:
+    """SMC marks structured snapshot. Booleans for sweep/FVG, floats for swing levels."""
+    if df is None or len(df) < 30:
+        return {"available": False}
+    last = df.iloc[-1]
+    # Look at last 5 bars for any active SMC events (not just current bar)
+    recent = df.tail(5)
+    return {
+        "available": True,
+        "bull_sweep_recent5": bool(recent.get("bull_sweep", pd.Series(dtype=bool)).any()) if "bull_sweep" in df.columns else False,
+        "bear_sweep_recent5": bool(recent.get("bear_sweep", pd.Series(dtype=bool)).any()) if "bear_sweep" in df.columns else False,
+        "fvg_bull_recent5":   bool(recent.get("fvg_bull",   pd.Series(dtype=bool)).any()) if "fvg_bull"   in df.columns else False,
+        "fvg_bear_recent5":   bool(recent.get("fvg_bear",   pd.Series(dtype=bool)).any()) if "fvg_bear"   in df.columns else False,
+        "bos_up":   _safe_bool(last.get("bos_up")),
+        "bos_dn":   _safe_bool(last.get("bos_dn")),
+        "prior_swing_high": _safe_float(last.get("prior_sh")),
+        "prior_swing_low":  _safe_float(last.get("prior_sl")),
+        "fvg_bull_top": _safe_float(last.get("fvg_bull_top")),
+        "fvg_bull_bot": _safe_float(last.get("fvg_bull_bot")),
+        "fvg_bear_top": _safe_float(last.get("fvg_bear_top")),
+        "fvg_bear_bot": _safe_float(last.get("fvg_bear_bot")),
+    }
+
+
+def extract_intermarket_numeric(inter: dict) -> dict:
+    """Structured intermarket snapshot. Includes new TIPS real-yield component."""
+    score = inter.get("score", 0.0) if inter else 0.0
+    components = (inter or {}).get("components") or {}
+    out = {
+        "score": _safe_float(score),
+        "interpretation": (
+            "bullish_xau" if score and score > 0.2 else
+            "bearish_xau" if score and score < -0.2 else "neutral"
+        ),
+    }
+    for name in ("dxy", "us10y", "tip", "vix", "spx", "gold_silver", "oil"):
+        c = components.get(name)
+        if c:
+            out[name] = {
+                "value": _safe_float(c.get("value")),
+                "score": _safe_float(c.get("score")),
+                "note":  str(c.get("note", ""))[:80],
+            }
+    return out
+
+
+def extract_cot_numeric(cot: dict) -> dict:
+    if not cot:
+        return {"available": False}
+    z = cot.get("z")
+    return {
+        "available": True,
+        "z_score_52w": _safe_float(z),
+        "regime": (
+            "extreme_long" if z is not None and z > 1.5 else
+            "extreme_short" if z is not None and z < -1.5 else "normal"
+        ) if z is not None else "unknown",
+        "net_long":  _safe_float(cot.get("net_long")),
+        "net_short": _safe_float(cot.get("net_short")),
+    }
+
+
+def extract_news_numeric(in_blackout: bool, blackout_event, upcoming: list) -> dict:
+    """Structured news context. Includes minutes_to_event for hard cut-off logic."""
+    out = {
+        "in_blackout": bool(in_blackout),
+        "blackout_event": None,
+        "next_event": None,
+        "minutes_to_next": None,
+    }
+    if in_blackout and blackout_event:
+        out["blackout_event"] = {
+            "title":    str(getattr(blackout_event, "title", "?"))[:80],
+            "when_utc": str(getattr(blackout_event, "when_utc", "?")),
+            "currency": str(getattr(blackout_event, "currency", "?")),
+        }
+    if upcoming:
+        u = upcoming[0]
+        out["next_event"] = {
+            "title":    str(getattr(u, "title", "?"))[:80],
+            "when_utc": str(getattr(u, "when_utc", "?")),
+            "currency": str(getattr(u, "currency", "?")),
+            "impact":   str(getattr(u, "impact", "?")),
+        }
+        # Compute minutes to event
+        try:
+            from datetime import datetime, timezone
+            when_str = str(getattr(u, "when_utc", ""))
+            if when_str:
+                # Normalize ISO format
+                when_dt = pd.Timestamp(when_str)
+                if when_dt.tzinfo is None:
+                    when_dt = when_dt.tz_localize("UTC")
+                now = datetime.now(timezone.utc)
+                delta_min = (when_dt.to_pydatetime() - now).total_seconds() / 60.0
+                out["minutes_to_next"] = round(delta_min, 1)
+        except Exception:
+            pass
+    return out
+
+
+# ── Legacy text builders (kept for back-compat) ──────────────────────────────
+
 def build_htf_context(df_4h: pd.DataFrame | None) -> str:
     if df_4h is None or len(df_4h) < 50:
         return "HTF data unavailable"
@@ -482,7 +702,7 @@ def build_htf_context(df_4h: pd.DataFrame | None) -> str:
     if pd.notna(e21) and pd.notna(e50):
         bias = "bullish" if e21 > e50 else "bearish"
     return (
-        f"H4 close={float(last['close']):.2f}, EMA21={e21:.2f}, EMA50={e50:.2f} → {bias}; "
+        f"H4 close={float(last['close']):.2f}, EMA21={e21:.2f}, EMA50={e50:.2f} -> {bias}; "
         f"RSI14={rsi:.0f}, ADX={adx:.0f}"
     )
 
@@ -490,12 +710,11 @@ def build_htf_context(df_4h: pd.DataFrame | None) -> str:
 def build_ltf_context(df: pd.DataFrame | None) -> str:
     if df is None or len(df) < 30:
         return "LTF data unavailable"
-    last = df.iloc[-1]
     return (
         "LTF: " + _last_row_summary(
             df,
             ["close", "ema9", "ema21", "ema50", "rsi14", "hist", "adx", "plus_di", "minus_di",
-             "bb_pctb", "atr"],
+             "bb_pctb", "atr14"],
         )
     )
 
@@ -634,8 +853,25 @@ class TierRunResult:
 
 
 def _build_user_prompts(market_ctx: dict) -> dict[str, str]:
-    """Build per-agent user prompts from a flat market context dict."""
+    """Build per-agent user prompts.
 
+    IMPROVEMENT #1: each prompt now embeds STRUCTURED JSON of raw numerical
+    values (close, ema21, atr14, rsi14, ...) instead of pre-formatted prose.
+    LLMs hallucinate less when fed raw numbers vs narrative descriptions.
+
+    The legacy text fields (htf_text, ltf_text, ...) are kept as a redundant
+    human-readable layer so the agent has both views.
+    """
+
+    # Structured numerical dicts (new — primary signal source for agents)
+    htf_num   = market_ctx.get("htf_numeric")   or {"available": False}
+    ltf_num   = market_ctx.get("ltf_numeric")   or {"available": False}
+    smc_num   = market_ctx.get("smc_numeric")   or {"available": False}
+    inter_num = market_ctx.get("inter_numeric") or {}
+    cot_num   = market_ctx.get("cot_numeric")   or {"available": False}
+    news_num  = market_ctx.get("news_numeric")  or {}
+
+    # Legacy text (back-compat, redundant context for readability)
     htf_text = market_ctx.get("htf_text", "")
     ltf_text = market_ctx.get("ltf_text", "")
     smc_text = market_ctx.get("smc_text", "")
@@ -647,9 +883,21 @@ def _build_user_prompts(market_ctx: dict) -> dict[str, str]:
     price = market_ctx.get("price", 0)
     timeframe_focus = market_ctx.get("timeframe_focus", "intraday")
 
+    # Compact JSON to keep token count tight — we don't pretty-print
+    def _j(d: dict) -> str:
+        return json.dumps(d, separators=(",", ":"), default=str)
+
     base_block = (
         f"Market context (XAU/USD):\n"
         f"- price={price}, session={session}, regime={regime}, focus={timeframe_focus}\n"
+        f"\n[STRUCTURED DATA - use these raw numbers for analysis, not the text below]\n"
+        f"htf_data={_j(htf_num)}\n"
+        f"ltf_data={_j(ltf_num)}\n"
+        f"smc_data={_j(smc_num)}\n"
+        f"intermarket_data={_j(inter_num)}\n"
+        f"cot_data={_j(cot_num)}\n"
+        f"news_data={_j(news_num)}\n"
+        f"\n[Text summary - human-readable redundancy, prefer JSON above]\n"
         f"- HTF: {htf_text}\n"
         f"- LTF: {ltf_text}\n"
         f"- SMC: {smc_text}\n"
@@ -661,15 +909,15 @@ def _build_user_prompts(market_ctx: dict) -> dict[str, str]:
     backtest_text = market_ctx.get("backtest_text", "no historical data")
 
     return {
-        "htf_bias":            base_block + "\nReturn HTF bias verdict (focus on multi-EMA hierarchy + ADX).",
-        "session_phase":       base_block + f"\nIs {session} session favourable for entry now? Return verdict.",
-        "ltf_technical":       base_block + "\nLTF trigger verdict aligned with HTF bias? Need 3+ confluence.",
-        "liquidity_smc":       base_block + "\nLiquidity / SMC verdict? Identify sweeps, FVGs, OBs explicitly.",
-        "order_flow":          base_block + "\nOrder flow / positioning verdict? Use COT + volume + stop hunts.",
-        "pattern_recognition": base_block + "\nIdentify any active classical chart pattern (H&S, triangles, flags, double top/bottom). Return pattern name + verdict.",
-        "volume_profile":      base_block + "\nWhere is price relative to POC / VAH / VAL? Return verdict + target.",
-        "news_proximity":      base_block + "\nIs there imminent news? Block if within 15min/30min.",
-        "volatility":          base_block + "\nIs volatility regime supportive? Block if extreme.",
+        "htf_bias":            base_block + "\nUsing htf_data JSON: check ema9/21/50/200 stack alignment, ADX strength, atr_ratio_vs_avg20 for vol regime, distance to swing_high_20/swing_low_20. Return HTF bias verdict.",
+        "session_phase":       base_block + f"\nIs {session} session favourable for entry now? Use minutes_to_next from news_data to detect London Fix proximity. Return verdict.",
+        "ltf_technical":       base_block + "\nUsing ltf_data JSON: confirm EMA stack agrees with HTF bias, check rsi14 not in extreme zone, candle_body_pct_of_range > 0.6 for momentum. Need 3+ confluence.",
+        "liquidity_smc":       base_block + "\nUsing smc_data JSON: identify bull_sweep_recent5/bear_sweep_recent5, active FVGs, distance from prior_swing_high/prior_swing_low. Return verdict.",
+        "order_flow":          base_block + "\nUsing cot_data + intermarket_data: check z_score_52w for positioning extremes, intermarket score for confluence. Return verdict.",
+        "pattern_recognition": base_block + "\nIdentify any active classical chart pattern (H&S, triangles, flags, double top/bottom) from price action. Use ltf_data + htf_data for context. Return pattern name + verdict.",
+        "volume_profile":      base_block + "\nWhere is price relative to POC / VAH / VAL? Without volume profile data, fall back to swing_high_20/swing_low_20 from htf_data as proxy. Return verdict + target.",
+        "news_proximity":      base_block + "\nUsing news_data JSON: if minutes_to_next is within 15/30/60 min of high-impact event, block. If in_blackout=true, hard veto.",
+        "volatility":          base_block + "\nUsing htf_data.atr_ratio_vs_avg20: >2.0 = extreme block. <0.5 = quiet, scalper-unfriendly. Check bb_width regime too.",
         "backtest_memory":     base_block + f"\nHistorical similar setups context: {backtest_text}\nReturn prior probability verdict based on past performance.",
     }
 
@@ -777,7 +1025,8 @@ def synthesize(
     If use_llm, ask synthesizer LLM. Otherwise apply rule-based aggregation.
     """
     # Always compute the rule-based baseline first (fallback / sanity).
-    rule_synth = _rule_synthesize(results)
+    # IMPROVEMENT #3: pass market_ctx so rule synth can weight per regime.
+    rule_synth = _rule_synthesize(results, market_ctx)
 
     if not use_llm or not cfg.enabled:
         return rule_synth
@@ -852,12 +1101,98 @@ def _classify_strength(conf: float, agree: int) -> str:
     return "FLAT"
 
 
-def _rule_synthesize(results: dict[str, AgentVerdict]) -> SynthResult:
-    """Deterministic fallback synthesizer (rule-based)."""
+# IMPROVEMENT #3: Per-regime agent weights.
+# Different regimes favor different signal sources:
+#  - Trending: HTF bias + LTF technical dominate (trend-following).
+#  - Ranging:  Liquidity/SMC + Volume Profile + session phase dominate (mean-reversion).
+#  - Volatile: News + Volatility weights up (risk control), trend signals down.
+#  - Quiet:    Same as ranging but with overall confidence haircut.
+#
+# Weights normalize to ~1.0 baseline. Higher = more influence in vote+confidence.
+REGIME_WEIGHTS: dict[str, dict[str, float]] = {
+    "trending_up": {
+        "htf_bias":            1.6,
+        "ltf_technical":       1.4,
+        "session_phase":       0.9,
+        "liquidity_smc":       1.0,
+        "order_flow":          1.1,
+        "pattern_recognition": 1.0,
+        "volume_profile":      0.8,
+    },
+    "trending_dn": {
+        "htf_bias":            1.6,
+        "ltf_technical":       1.4,
+        "session_phase":       0.9,
+        "liquidity_smc":       1.0,
+        "order_flow":          1.1,
+        "pattern_recognition": 1.0,
+        "volume_profile":      0.8,
+    },
+    "ranging": {
+        "htf_bias":            0.7,   # trend agents lose value in chop
+        "ltf_technical":       0.9,
+        "session_phase":       1.3,
+        "liquidity_smc":       1.5,   # SMC sweeps shine in range
+        "order_flow":          1.1,
+        "pattern_recognition": 1.0,
+        "volume_profile":      1.5,   # POC/VAH/VAL most useful here
+    },
+    "volatile": {
+        "htf_bias":            0.8,
+        "ltf_technical":       0.7,   # whipsaw risk
+        "session_phase":       1.0,
+        "liquidity_smc":       1.2,
+        "order_flow":          1.3,
+        "pattern_recognition": 0.8,
+        "volume_profile":      0.9,
+    },
+    "quiet": {
+        "htf_bias":            0.9,
+        "ltf_technical":       0.9,
+        "session_phase":       1.0,
+        "liquidity_smc":       1.2,
+        "order_flow":          1.1,
+        "pattern_recognition": 1.0,
+        "volume_profile":      1.4,
+    },
+}
+
+# Default weights when regime unknown
+DEFAULT_REGIME_WEIGHTS = {
+    "htf_bias":            1.0,
+    "ltf_technical":       1.0,
+    "session_phase":       1.0,
+    "liquidity_smc":       1.0,
+    "order_flow":          1.0,
+    "pattern_recognition": 1.0,
+    "volume_profile":      1.0,
+}
+
+DIRECTIONAL_AGENTS = (
+    "htf_bias", "session_phase", "ltf_technical", "liquidity_smc",
+    "order_flow", "pattern_recognition", "volume_profile",
+)
+
+
+def _regime_weights(regime: str | None) -> dict[str, float]:
+    if not regime:
+        return DEFAULT_REGIME_WEIGHTS
+    return REGIME_WEIGHTS.get(regime, DEFAULT_REGIME_WEIGHTS)
+
+
+def _rule_synthesize(results: dict[str, AgentVerdict], market_ctx: dict | None = None) -> SynthResult:
+    """Deterministic fallback synthesizer with regime-aware weighted voting.
+
+    IMPROVEMENT #3: replaces flat majority (need 3 of 5 agents) with weighted
+    score per regime. An agent's "vote weight" = its confidence × regime_weight.
+    Action chosen by highest total weight; FLAT if no clear winner (margin < 1.0).
+    """
     devil = results.get("devils_advocate")
     news = results.get("news_proximity")
+    regime = (market_ctx or {}).get("regime", "")
+    weights = _regime_weights(regime)
 
-    # News blocks first
+    # ── Hard veto: news ────────────────────────────────────────────────────
     if news and news.verdict == "FLAT" and news.confidence >= 0.7:
         return SynthResult(
             final_action="FLAT",
@@ -869,7 +1204,7 @@ def _rule_synthesize(results: dict[str, AgentVerdict]) -> SynthResult:
             agents_summary=[{"name": v.name, "verdict": v.verdict, "confidence": v.confidence} for v in results.values()],
         )
 
-    # Devil veto
+    # ── Hard veto: devil's advocate ────────────────────────────────────────
     if devil and devil.verdict == "FLAT" and devil.confidence >= 0.8:
         return SynthResult(
             final_action="FLAT",
@@ -881,56 +1216,92 @@ def _rule_synthesize(results: dict[str, AgentVerdict]) -> SynthResult:
             agents_summary=[{"name": v.name, "verdict": v.verdict, "confidence": v.confidence} for v in results.values()],
         )
 
-    # Vote on direction (only directional agents)
-    directional_keys = ["htf_bias", "session_phase", "ltf_technical", "liquidity_smc", "order_flow"]
-    long_n = sum(1 for k in directional_keys if k in results and results[k].verdict == "LONG")
-    short_n = sum(1 for k in directional_keys if k in results and results[k].verdict == "SHORT")
+    # ── Weighted directional voting (IMPROVEMENT #3) ───────────────────────
+    long_score  = 0.0
+    short_score = 0.0
+    long_n  = 0
+    short_n = 0
+    for k in DIRECTIONAL_AGENTS:
+        v = results.get(k)
+        if not v:
+            continue
+        w = weights.get(k, 1.0)
+        if v.verdict == "LONG":
+            long_score += v.confidence * w
+            long_n += 1
+        elif v.verdict == "SHORT":
+            short_score += v.confidence * w
+            short_n += 1
 
-    if long_n >= 3:
-        action = "LONG"; agree = long_n
-    elif short_n >= 3:
-        action = "SHORT"; agree = short_n
+    # Decide direction by which side has more weighted score (margin must be > 0.5)
+    margin = abs(long_score - short_score)
+    min_margin = 0.5    # require meaningful weight diff to avoid coinflips
+    min_score  = 1.5    # at least 1.5 cumulative weighted-confidence (e.g. 2 agents with 0.75)
+
+    if long_score > short_score and margin >= min_margin and long_score >= min_score:
+        action = "LONG"
+        agree = long_n
+        winning_score = long_score
+    elif short_score > long_score and margin >= min_margin and short_score >= min_score:
+        action = "SHORT"
+        agree = short_n
+        winning_score = short_score
     else:
         return SynthResult(
             final_action="FLAT",
             confidence=0.0,
             signal_strength="FLAT",
-            primary_driver="no consensus",
-            reasoning_chain=[f"long={long_n} short={short_n} no 3+ consensus"],
+            primary_driver="no_weighted_consensus",
+            reasoning_chain=[
+                f"regime={regime} long_score={long_score:.2f} short_score={short_score:.2f} "
+                f"margin={margin:.2f} (need >={min_margin} and winner>={min_score})"
+            ],
             risks=[],
             agents_summary=[{"name": v.name, "verdict": v.verdict, "confidence": v.confidence} for v in results.values()],
         )
 
-    confidences = [results[k].confidence for k in directional_keys if k in results and results[k].verdict == action]
-    avg = sum(confidences) / max(1, len(confidences))
+    # Normalized confidence: winning_score / max possible weighted score for that side
+    # max_possible = sum of all weights (if every agent had conf=1.0 in this direction)
+    max_possible = sum(weights.get(k, 1.0) for k in DIRECTIONAL_AGENTS if k in results)
+    normalized_conf = winning_score / max_possible if max_possible > 0 else 0.0
+    normalized_conf = max(0.0, min(1.0, normalized_conf))
 
     # Devil haircut
     if devil and devil.verdict != action:
-        avg = max(0.0, avg - 0.05 - 0.03 * len([r for r in (devil.reasoning or []) if r]))
+        red_flag_count = len([r for r in (devil.reasoning or []) if r])
+        normalized_conf = max(0.0, normalized_conf - 0.05 - 0.03 * red_flag_count)
 
-    strength = _classify_strength(avg, agree)
-    primary = ""
-    for key, label in [
-        ("liquidity_smc", "SMC liquidity"),
-        ("htf_bias",      "HTF trend"),
-        ("ltf_technical", "LTF technical"),
-        ("order_flow",    "order flow"),
-    ]:
-        if key in results and results[key].verdict == action and results[key].confidence >= 0.6:
-            primary = label
-            break
+    # Backtest memory haircut (if it disagrees → reduce conf)
+    bt = results.get("backtest_memory")
+    if bt and bt.verdict == "FLAT" and bt.confidence >= 0.5:
+        normalized_conf = max(0.0, normalized_conf - 0.05)
+
+    strength = _classify_strength(normalized_conf, agree)
+
+    # Primary driver: highest weighted contribution toward action
+    primary_key = max(
+        (k for k in DIRECTIONAL_AGENTS
+         if k in results and results[k].verdict == action),
+        key=lambda k: results[k].confidence * weights.get(k, 1.0),
+        default=None,
+    )
+    primary = AGENT_LABELS.get(primary_key, "mixed") if primary_key else "mixed"
 
     chain = [
-        f"[{v.name}] {v.verdict} conf={v.confidence:.2f}: {' '.join(v.reasoning[:1])}"
-        for v in results.values()
+        f"regime={regime}, weights tuned for this regime",
+        f"weighted_long={long_score:.2f} weighted_short={short_score:.2f} margin={margin:.2f}",
     ]
+    chain.extend(
+        f"[{v.name}] {v.verdict} conf={v.confidence:.2f} w={weights.get(k, 1.0):.1f}: {' '.join(v.reasoning[:1])}"
+        for k, v in results.items()
+    )
     risks = list(devil.reasoning) if devil and devil.reasoning else []
 
     return SynthResult(
         final_action=action,
-        confidence=round(avg, 3),
+        confidence=round(normalized_conf, 3),
         signal_strength=strength,
-        primary_driver=primary or "mixed",
+        primary_driver=primary,
         reasoning_chain=chain,
         risks=risks,
         agents_summary=[{"name": v.name, "verdict": v.verdict, "confidence": v.confidence} for v in results.values()],

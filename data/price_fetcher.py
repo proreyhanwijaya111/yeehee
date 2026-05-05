@@ -29,6 +29,8 @@ FALLBACK_TICKERS = {
     "xau":    ["GC=F", "XAUUSD=X", "GLD", "IAU"],     # gold futures -> spot fx -> ETF -> alt ETF
     "dxy":    ["DX-Y.NYB", "DX=F", "UUP"],            # ICE DXY -> futures -> bullish dollar ETF
     "us10y":  ["^TNX", "^IRX", "TLT"],                # 10Y yield -> 13W -> long bond ETF
+    "tip":    ["TIP", "VTIP", "SCHP"],                # IMPROVEMENT #2: TIPS ETF (real yield proxy)
+                                                       # corr -0.85 to gold price. Inverse: TIP up = real yields down = gold up
     "vix":    ["^VIX"],
     "spx":    ["^GSPC", "SPY"],
     "silver": ["SI=F", "XAGUSD=X", "SLV"],
@@ -161,9 +163,12 @@ def fetch_xau(interval: str = "1h", period: Optional[str] = None) -> pd.DataFram
 
 
 def fetch_intermarket_bundle(interval: str = "1h", period: Optional[str] = None) -> dict[str, pd.DataFrame]:
-    """Bundle XAU + DXY + US10Y + VIX + SPX. Each ticker has its own fallback chain."""
+    """Bundle XAU + DXY + US10Y + TIPS + VIX + SPX + silver.
+    IMPROVEMENT #2: TIPS (real yield ETF) added — most predictive driver of gold (corr ~-0.85).
+    Each ticker has its own fallback chain.
+    """
     out = {}
-    for key in ("xau", "dxy", "us10y", "vix", "spx", "silver"):
+    for key in ("xau", "dxy", "us10y", "tip", "vix", "spx", "silver"):
         try:
             out[key] = _fetch_with_fallback(key, interval, period)
         except Exception as e:

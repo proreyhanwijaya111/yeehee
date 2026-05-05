@@ -112,6 +112,13 @@ export interface ActiveTrade {
   risks:            unknown[]
   regime:           string | null
   session:          string | null
+  // IMPROVEMENT #4: Kelly fractional sizing fields (added in migration 004)
+  risk_pct?:        number | null   // 0.01 = 1% of equity at risk
+  kelly_fraction?:  number | null   // raw Kelly suggestion before confidence scale
+  profile?:         string | null   // profile cap used at open (konservatif/moderat/agresif/bebas)
+  prior_winrate?:   number | null   // historical win rate snapshot at open
+  prior_avg_win_r?: number | null
+  prior_n_closed?:  number | null   // sample size used for Kelly
 }
 
 export async function getActiveTrades(opts?: { status?: TradeStatus | 'all'; limit?: number }) {

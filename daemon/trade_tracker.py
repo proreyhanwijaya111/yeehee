@@ -5,10 +5,12 @@ Lifecycle:
    - Per style (scalper/intraday/swing), if signal LONG/SHORT with non-zero
      confidence AND no existing OPEN trade for same style, INSERT new row
      with entry/sl/tp from signal. Unique index in DB enforces 1-OPEN-per-style.
+   - IMPROVEMENT #4: also computes Kelly fractional risk_pct based on
+     historical win_rate + avg_win_r for this style + confidence.
 2. update_open_trades(store, df_5m)
    - For each OPEN trade, examine candles since last_check_at.
-   - Detect SL hit (low ≤ sl for LONG, high ≥ sl for SHORT).
-   - Detect TP1/TP2/TP3 hit (high ≥ tpN for LONG, low ≤ tpN for SHORT).
+   - Detect SL hit (low <= sl for LONG, high >= sl for SHORT).
+   - Detect TP1/TP2/TP3 hit (high >= tpN for LONG, low <= tpN for SHORT).
    - Update hit_tpN flags + high_after_open + low_after_open.
    - Close trade if SL hit OR TP3 hit OR past expiry_at.
    - pnl_r computed from levels: tp_n hit -> +2/+3 R, sl hit -> -1 R, expired -> mark-to-market.
@@ -30,6 +32,9 @@ from typing import Optional, Literal
 
 import pandas as pd
 
+from config.settings import RISK_PROFILES, DEFAULT_RISK_PROFILE
+from risk.sizing import kelly_fractional
+
 
 # Trade expiry per style. After this duration, daemon force-closes trade
 # (mark-to-market). Set conservatively — scalp shouldn't run for days.
@@ -42,6 +47,110 @@ EXPIRY_HOURS = {
 
 # Minimum confidence to open a trade. Below this = "weak signal", skip.
 MIN_CONFIDENCE = 0.50
+
+# IMPROVEMENT #4: Kelly sizing constants.
+# Need at least N closed trades for this style before Kelly is statistically meaningful.
+# Below threshold we fall back to: risk_pct = profile_cap × confidence.
+KELLY_MIN_CLOSED = 20
+
+# Quarter-Kelly is the conservative default — full Kelly is too volatile.
+# RISK_PROFILES contains per-profile kelly_frac override (0.15 / 0.25 / 0.4 / 1.0).
+DEFAULT_KELLY_FRACTION = 0.25
+
+# Floor risk_pct (don't size below this even if Kelly says zero — it's still a paper trade).
+RISK_PCT_FLOOR = 0.001  # 0.1% minimum
+
+# IMPROVEMENT #4: confidence-adjusted sizing.
+# Confidence 0.50 = 50% of profile cap. Confidence 0.95 = 100% of profile cap.
+# Linear interpolation between MIN_CONFIDENCE and 1.0.
+def _confidence_multiplier(confidence: float) -> float:
+    if confidence <= MIN_CONFIDENCE:
+        return 0.5
+    if confidence >= 0.95:
+        return 1.0
+    return 0.5 + 0.5 * (confidence - MIN_CONFIDENCE) / (0.95 - MIN_CONFIDENCE)
+
+
+def compute_risk_sizing(
+    store,
+    style: str,
+    confidence: float,
+    profile: str = "moderat",
+) -> dict:
+    """IMPROVEMENT #4: compute risk_pct using Kelly + confidence + profile cap.
+
+    Returns:
+      {
+        "risk_pct": 0.005,            # final fraction of equity to risk
+        "kelly_fraction": 0.12,        # raw Kelly suggestion
+        "prior_winrate": 0.55,         # historical win rate snapshot
+        "prior_avg_win_r": 1.85,
+        "prior_n_closed": 12,
+        "profile": "moderat",
+        "method": "kelly" | "confidence_only" | "floor",
+      }
+    """
+    profile_cfg = RISK_PROFILES.get(profile, RISK_PROFILES.get("moderat", {}))
+    profile_cap = float(profile_cfg.get("risk_per_trade", 0.01))
+    kelly_frac = float(profile_cfg.get("kelly_frac", DEFAULT_KELLY_FRACTION))
+
+    # Default snapshot
+    out = {
+        "risk_pct": max(profile_cap * _confidence_multiplier(confidence), RISK_PCT_FLOOR),
+        "kelly_fraction": None,
+        "prior_winrate": None,
+        "prior_avg_win_r": None,
+        "prior_n_closed": 0,
+        "profile": profile,
+        "method": "confidence_only",
+    }
+
+    # Try to fetch historical stats for this style
+    if not store or not getattr(store, "has_db", False):
+        return out
+
+    try:
+        r = (
+            store._client.from_("portfolio_stats_by_style")
+            .select("win_rate, avg_win_r, closed_count")
+            .eq("user_id", "default")
+            .eq("style", style)
+            .limit(1)
+            .execute()
+        )
+        rows = r.data or []
+        if not rows:
+            return out
+        row = rows[0]
+        n_closed = int(row.get("closed_count") or 0)
+        win_rate = float(row.get("win_rate") or 0)
+        avg_win_r = float(row.get("avg_win_r") or 0)
+
+        out.update({
+            "prior_winrate": round(win_rate, 4),
+            "prior_avg_win_r": round(avg_win_r, 3),
+            "prior_n_closed": n_closed,
+        })
+
+        # Need enough samples + positive avg_win_r for Kelly
+        if n_closed < KELLY_MIN_CLOSED or avg_win_r <= 0 or win_rate <= 0:
+            return out
+
+        # Compute fractional Kelly
+        f = kelly_fractional(win_rate=win_rate, avg_win_r=avg_win_r, fraction=kelly_frac)
+        out["kelly_fraction"] = round(f, 5)
+
+        # Final risk_pct = min(profile_cap, kelly × confidence_multiplier).
+        # i.e. profile cap is the hard ceiling — Kelly can only reduce, not exceed.
+        kelly_with_conf = f * _confidence_multiplier(confidence)
+        risk_pct = min(profile_cap, max(kelly_with_conf, RISK_PCT_FLOOR))
+        out["risk_pct"] = round(risk_pct, 5)
+        out["method"] = "kelly"
+    except Exception as e:
+        # Graceful: if view doesn't exist (old schema) or query fails, fall back
+        out["method"] = f"confidence_only_fallback ({type(e).__name__})"
+
+    return out
 
 
 @dataclass
@@ -132,6 +241,16 @@ def open_trade_if_eligible(
     now = datetime.now(timezone.utc)
     expiry = _expiry_at(now, style)
 
+    # IMPROVEMENT #4: compute Kelly fractional risk_pct based on confidence + history.
+    # Defaults to DEFAULT_RISK_PROFILE (moderat) — user can override via app_settings.
+    profile = DEFAULT_RISK_PROFILE
+    sizing = compute_risk_sizing(store=store, style=style, confidence=confidence, profile=profile)
+    log(
+        f"[tracker] {style} sizing: risk={sizing['risk_pct']*100:.2f}% "
+        f"method={sizing['method']} kelly={sizing.get('kelly_fraction')} "
+        f"prior_n={sizing['prior_n_closed']} prior_wr={sizing.get('prior_winrate')}"
+    )
+
     payload = {
         "user_id":         "default",
         "bundle_id":       bundle_id,
@@ -154,7 +273,20 @@ def open_trade_if_eligible(
         "risks":           signal.get("risks", []),
         "regime":          regime,
         "session":         session,
+        # IMPROVEMENT #4: Kelly sizing snapshot
+        "risk_pct":        sizing["risk_pct"],
+        "kelly_fraction":  sizing.get("kelly_fraction"),
+        "profile":         sizing["profile"],
+        "prior_winrate":   sizing.get("prior_winrate"),
+        "prior_avg_win_r": sizing.get("prior_avg_win_r"),
+        "prior_n_closed":  sizing["prior_n_closed"],
     }
+
+    # IMPROVEMENT #4: graceful degrade if migration 004 not yet applied.
+    # New columns (risk_pct, kelly_fraction, profile, prior_*) only exist after
+    # migration 004 — fall back to legacy schema if INSERT fails with column error.
+    KELLY_FIELDS = ("risk_pct", "kelly_fraction", "profile",
+                    "prior_winrate", "prior_avg_win_r", "prior_n_closed")
 
     try:
         r = store._client.from_("active_trades").insert(payload).execute()
@@ -162,6 +294,21 @@ def open_trade_if_eligible(
         log(f"[tracker] OPENED {style} {side} @ {entry} sl={sl} tp1={tp1} id={str(new_id)[:8]}")
         return new_id
     except Exception as e:
+        msg = str(e).lower()
+        # If error mentions a column that's missing, retry without Kelly fields
+        is_missing_col = any(f in msg for f in KELLY_FIELDS) or "column" in msg or "schema" in msg
+        if is_missing_col:
+            log(f"[tracker] open {style}: legacy schema detected, retrying without Kelly fields")
+            legacy_payload = {k: v for k, v in payload.items() if k not in KELLY_FIELDS}
+            try:
+                r = store._client.from_("active_trades").insert(legacy_payload).execute()
+                new_id = (r.data or [{}])[0].get("id")
+                log(f"[tracker] OPENED {style} {side} @ {entry} sl={sl} tp1={tp1} id={str(new_id)[:8]} "
+                    f"(legacy schema; apply migration 004 to enable Kelly sizing)")
+                return new_id
+            except Exception as e2:
+                log(f"[tracker] open {style} failed (even legacy): {e2}")
+                return None
         log(f"[tracker] open {style} failed: {e}")
         return None
 
