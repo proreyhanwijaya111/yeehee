@@ -43,6 +43,20 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+# Load .env from project root (yeehee-daemon/.env) — same approach as daemon/main.py
+try:
+    from dotenv import load_dotenv
+    load_dotenv(ROOT / ".env")
+except ImportError:
+    # Manual parse fallback (dotenv not installed)
+    env_path = ROOT / ".env"
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8-sig").splitlines():
+            line = line.strip()
+            if "=" in line and not line.startswith("#"):
+                k, v = line.split("=", 1)
+                os.environ.setdefault(k.strip(), v.strip())
+
 try:
     from fastapi import FastAPI, HTTPException, Query
     from pydantic import BaseModel
@@ -62,7 +76,9 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip()
 SUPABASE_KEY = (os.environ.get("SUPABASE_SERVICE_KEY") or os.environ.get("SUPABASE_ANON_KEY") or "").strip()
 
 if not SUPABASE_URL or not SUPABASE_KEY:
-    print("[execution_api] SUPABASE_URL + SUPABASE_*_KEY required in env. Check rcs/.env")
+    print(f"[execution_api] SUPABASE_URL + SUPABASE_*_KEY required.")
+    print(f"[execution_api] Looked at: {ROOT}\\.env")
+    print(f"[execution_api] Verify .env contains SUPABASE_URL=https://... and SUPABASE_ANON_KEY (or SERVICE_KEY)")
     # Don't exit — allow startup, fail per-request instead
 
 _supa = None
