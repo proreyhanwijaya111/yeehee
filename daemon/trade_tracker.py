@@ -1,0 +1,375 @@
+"""Forward-test trade tracker.
+
+Lifecycle:
+1. open_trade_if_eligible(bundle, style, signal_dict, store)
+   - Per style (scalper/intraday/swing), if signal LONG/SHORT with non-zero
+     confidence AND no existing OPEN trade for same style, INSERT new row
+     with entry/sl/tp from signal. Unique index in DB enforces 1-OPEN-per-style.
+2. update_open_trades(store, df_5m)
+   - For each OPEN trade, examine candles since last_check_at.
+   - Detect SL hit (low ≤ sl for LONG, high ≥ sl for SHORT).
+   - Detect TP1/TP2/TP3 hit (high ≥ tpN for LONG, low ≤ tpN for SHORT).
+   - Update hit_tpN flags + high_after_open + low_after_open.
+   - Close trade if SL hit OR TP3 hit OR past expiry_at.
+   - pnl_r computed from levels: tp_n hit -> +2/+3 R, sl hit -> -1 R, expired -> mark-to-market.
+
+Caveats / honest limitations:
+- Daemon refresh = 5 min. Between cycles, price might cross both SL and TP intra-bar.
+  Resolution: iterate 5m candles between last_check_at and now. SL has priority over TP if
+  same bar (worst-case fill). Conservative.
+- Slippage not modeled — assume entry/sl/tp fill exactly. Real broker may slip.
+- Spread not modeled — pip costs ignored.
+
+Same Supabase service_role key used by daemon for all writes.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from typing import Optional, Literal
+
+import pandas as pd
+
+
+# Trade expiry per style. After this duration, daemon force-closes trade
+# (mark-to-market). Set conservatively — scalp shouldn't run for days.
+EXPIRY_HOURS = {
+    "scalper":  4,    # 4h max — scalper is intra-session
+    "intraday": 24,   # 1d max — intraday end-of-day usually closes
+    "swing":    24 * 7,  # 7d max — swing trades can hold days
+}
+
+
+# Minimum confidence to open a trade. Below this = "weak signal", skip.
+MIN_CONFIDENCE = 0.50
+
+
+@dataclass
+class TradeUpdate:
+    """Computed update for one trade. Returns None on no-change."""
+    hit_tp1: bool = False
+    hit_tp2: bool = False
+    hit_tp3: bool = False
+    hit_sl:  bool = False
+    high_after_open: Optional[float] = None
+    low_after_open:  Optional[float] = None
+    closed:    bool = False
+    status:    Optional[str] = None         # 'OPEN' | 'TP1' | 'TP2' | 'TP3' | 'SL' | 'EXPIRED'
+    exit_price: Optional[float] = None
+    exit_reason: Optional[str] = None
+    closed_at: Optional[str] = None
+    pnl_r:     Optional[float] = None
+    pnl_pct:   Optional[float] = None
+
+
+def _expiry_at(opened_at: datetime, style: str) -> datetime:
+    return opened_at + timedelta(hours=EXPIRY_HOURS.get(style, 24))
+
+
+# ─── Open new trade ─────────────────────────────────────────────────────────────
+
+def open_trade_if_eligible(
+    store,
+    style: str,
+    signal: dict,
+    bundle_id: Optional[str],
+    regime: Optional[str] = None,
+    session: Optional[str] = None,
+    log=print,
+) -> Optional[str]:
+    """Try to open new trade. Returns trade id or None if skipped.
+
+    Skip reasons:
+    - Signal side is not LONG/SHORT (FLAT)
+    - Confidence < MIN_CONFIDENCE
+    - Existing OPEN trade for same (user, style) — DB unique index will reject anyway
+    - Levels invalid (entry/sl/tp == 0)
+    """
+    if not store.has_db:
+        return None
+
+    side = (signal.get("side") or signal.get("action") or "FLAT").upper()
+    if side not in ("LONG", "SHORT"):
+        return None
+
+    confidence = float(signal.get("confidence") or 0)
+    if confidence < MIN_CONFIDENCE:
+        log(f"[tracker] skip {style}: confidence {confidence:.2f} < {MIN_CONFIDENCE}")
+        return None
+
+    entry = float(signal.get("entry") or 0)
+    sl    = float(signal.get("sl") or 0)
+    tp1   = float(signal.get("tp1") or 0)
+    if entry <= 0 or sl <= 0 or tp1 <= 0:
+        log(f"[tracker] skip {style}: invalid levels entry={entry} sl={sl} tp1={tp1}")
+        return None
+
+    # Sanity: SL must be on opposite side of entry vs TP
+    if side == "LONG" and (sl >= entry or tp1 <= entry):
+        log(f"[tracker] skip {style} LONG: sl={sl} not below entry={entry} or tp1={tp1} not above")
+        return None
+    if side == "SHORT" and (sl <= entry or tp1 >= entry):
+        log(f"[tracker] skip {style} SHORT: sl={sl} not above entry={entry} or tp1={tp1} not below")
+        return None
+
+    # Check existing OPEN trade for this style (avoid unique-index error noise)
+    try:
+        existing = (
+            store._client.from_("active_trades")
+            .select("id")
+            .eq("user_id", "default")
+            .eq("style", style)
+            .eq("status", "OPEN")
+            .limit(1)
+            .execute()
+        )
+        if existing.data and len(existing.data) > 0:
+            log(f"[tracker] skip {style}: existing OPEN trade {existing.data[0]['id'][:8]}")
+            return None
+    except Exception as e:
+        log(f"[tracker] check existing failed: {e}")
+
+    now = datetime.now(timezone.utc)
+    expiry = _expiry_at(now, style)
+
+    payload = {
+        "user_id":         "default",
+        "bundle_id":       bundle_id,
+        "style":           style,
+        "side":            side,
+        "signal_strength": signal.get("signal_strength"),
+        "confidence":      confidence,
+        "entry":           round(entry, 2),
+        "sl":              round(sl, 2),
+        "tp1":             round(tp1, 2),
+        "tp2":             round(float(signal.get("tp2") or 0), 2) or None,
+        "tp3":             round(float(signal.get("tp3") or 0), 2) or None,
+        "status":          "OPEN",
+        "high_after_open": round(entry, 2),
+        "low_after_open":  round(entry, 2),
+        "last_check_at":   now.isoformat(),
+        "opened_at":       now.isoformat(),
+        "expiry_at":       expiry.isoformat(),
+        "reasons":         signal.get("reasons", []),
+        "risks":           signal.get("risks", []),
+        "regime":          regime,
+        "session":         session,
+    }
+
+    try:
+        r = store._client.from_("active_trades").insert(payload).execute()
+        new_id = (r.data or [{}])[0].get("id")
+        log(f"[tracker] OPENED {style} {side} @ {entry} sl={sl} tp1={tp1} id={str(new_id)[:8]}")
+        return new_id
+    except Exception as e:
+        log(f"[tracker] open {style} failed: {e}")
+        return None
+
+
+# ─── Monitor + close existing OPEN trades ──────────────────────────────────────
+
+def update_open_trades(store, df_5m: pd.DataFrame, log=print) -> int:
+    """Iterate all OPEN trades, check SL/TP/expiry, update or close.
+    df_5m: latest 5min OHLCV (must have columns: high, low, close)
+    Returns number of trades modified.
+    """
+    if not store.has_db or df_5m is None or len(df_5m) == 0:
+        return 0
+
+    try:
+        r = (
+            store._client.from_("active_trades")
+            .select("*")
+            .eq("user_id", "default")
+            .eq("status", "OPEN")
+            .execute()
+        )
+        open_trades = r.data or []
+    except Exception as e:
+        log(f"[tracker] fetch open failed: {e}")
+        return 0
+
+    if not open_trades:
+        return 0
+
+    now = datetime.now(timezone.utc)
+    modified = 0
+
+    for trade in open_trades:
+        try:
+            update = _evaluate_trade(trade, df_5m, now)
+            if update is None:
+                continue
+            patch = _update_to_dict(update)
+            if not patch:
+                continue
+            store._client.from_("active_trades").update(patch).eq("id", trade["id"]).execute()
+            modified += 1
+            if update.closed:
+                log(f"[tracker] CLOSED {trade['style']} {trade['side']} -> {update.status} pnl={update.pnl_r}R "
+                    f"id={str(trade['id'])[:8]}")
+        except Exception as e:
+            log(f"[tracker] update trade {trade.get('id','?')[:8]} failed: {e}")
+
+    return modified
+
+
+def _evaluate_trade(trade: dict, df_5m: pd.DataFrame, now: datetime) -> Optional[TradeUpdate]:
+    """Decide what to update for this trade based on candles since last_check_at."""
+    side = trade["side"]
+    sl   = float(trade["sl"])
+    entry = float(trade["entry"])
+    tp1  = float(trade.get("tp1") or 0)
+    tp2  = float(trade.get("tp2") or 0)
+    tp3  = float(trade.get("tp3") or 0)
+    hit_tp1 = bool(trade.get("hit_tp1"))
+    hit_tp2 = bool(trade.get("hit_tp2"))
+    hit_tp3 = bool(trade.get("hit_tp3"))
+    high_after = float(trade.get("high_after_open") or entry)
+    low_after  = float(trade.get("low_after_open") or entry)
+
+    last_check = trade.get("last_check_at") or trade.get("opened_at")
+    last_check_dt = pd.Timestamp(last_check)
+
+    # Filter df_5m to bars at or after last_check
+    candles = df_5m[df_5m.index >= last_check_dt]
+    if len(candles) == 0:
+        # No new bars yet, but check expiry
+        return _check_expiry(trade, now, df_5m)
+
+    upd = TradeUpdate(
+        hit_tp1=hit_tp1, hit_tp2=hit_tp2, hit_tp3=hit_tp3,
+        high_after_open=high_after, low_after_open=low_after,
+    )
+
+    closed_in_bar = False
+
+    for ts, row in candles.iterrows():
+        h = float(row["high"]); l = float(row["low"])
+        upd.high_after_open = max(upd.high_after_open or h, h)
+        upd.low_after_open  = min(upd.low_after_open or l, l)
+
+        if side == "LONG":
+            # Check SL first (worst-case fill)
+            if l <= sl:
+                upd.closed = True
+                upd.status = "SL"
+                upd.exit_price = sl
+                upd.exit_reason = "sl_hit"
+                upd.closed_at = ts.isoformat() if hasattr(ts, "isoformat") else now.isoformat()
+                upd.pnl_r = -1.0
+                upd.pnl_pct = (sl - entry) / entry * 100
+                upd.hit_sl = True
+                closed_in_bar = True
+                break
+            # TP3 = full target
+            if tp3 > 0 and h >= tp3:
+                upd.hit_tp1 = upd.hit_tp2 = upd.hit_tp3 = True
+                upd.closed = True
+                upd.status = "TP3"
+                upd.exit_price = tp3
+                upd.exit_reason = "tp_hit"
+                upd.closed_at = ts.isoformat() if hasattr(ts, "isoformat") else now.isoformat()
+                # Compute R from sl distance
+                slDist = abs(entry - sl)
+                upd.pnl_r = round((tp3 - entry) / slDist, 3) if slDist > 0 else 3.0
+                upd.pnl_pct = (tp3 - entry) / entry * 100
+                closed_in_bar = True
+                break
+            # Soft hits (track but don't close)
+            if tp1 > 0 and h >= tp1: upd.hit_tp1 = True
+            if tp2 > 0 and h >= tp2: upd.hit_tp2 = True
+        else:
+            # SHORT
+            if h >= sl:
+                upd.closed = True; upd.status = "SL"; upd.exit_price = sl
+                upd.exit_reason = "sl_hit"
+                upd.closed_at = ts.isoformat() if hasattr(ts, "isoformat") else now.isoformat()
+                upd.pnl_r = -1.0
+                upd.pnl_pct = (entry - sl) / entry * 100
+                upd.hit_sl = True
+                closed_in_bar = True
+                break
+            if tp3 > 0 and l <= tp3:
+                upd.hit_tp1 = upd.hit_tp2 = upd.hit_tp3 = True
+                upd.closed = True; upd.status = "TP3"; upd.exit_price = tp3
+                upd.exit_reason = "tp_hit"
+                upd.closed_at = ts.isoformat() if hasattr(ts, "isoformat") else now.isoformat()
+                slDist = abs(entry - sl)
+                upd.pnl_r = round((entry - tp3) / slDist, 3) if slDist > 0 else 3.0
+                upd.pnl_pct = (entry - tp3) / entry * 100
+                closed_in_bar = True
+                break
+            if tp1 > 0 and l <= tp1: upd.hit_tp1 = True
+            if tp2 > 0 and l <= tp2: upd.hit_tp2 = True
+
+    if closed_in_bar:
+        return upd
+
+    # Not closed by SL/TP — check expiry
+    expiry_dt = pd.Timestamp(trade["expiry_at"])
+    if now >= expiry_dt:
+        last_close = float(df_5m.iloc[-1]["close"])
+        upd.closed = True
+        upd.status = "EXPIRED"
+        upd.exit_price = last_close
+        upd.exit_reason = "expired"
+        upd.closed_at = now.isoformat()
+        slDist = abs(entry - sl)
+        if slDist > 0:
+            upd.pnl_r = round(
+                ((last_close - entry) if side == "LONG" else (entry - last_close)) / slDist,
+                3,
+            )
+        else:
+            upd.pnl_r = 0.0
+        upd.pnl_pct = round(
+            ((last_close - entry) if side == "LONG" else (entry - last_close)) / entry * 100,
+            4,
+        )
+
+    return upd
+
+
+def _check_expiry(trade: dict, now: datetime, df_5m: pd.DataFrame) -> Optional[TradeUpdate]:
+    """Only check expiry, no candle iteration (called when no new bars)."""
+    expiry_dt = pd.Timestamp(trade["expiry_at"])
+    if now < expiry_dt:
+        return None
+    last_close = float(df_5m.iloc[-1]["close"])
+    entry = float(trade["entry"])
+    sl    = float(trade["sl"])
+    side  = trade["side"]
+    slDist = abs(entry - sl)
+    pnl_r = 0.0
+    if slDist > 0:
+        pnl_r = round(
+            ((last_close - entry) if side == "LONG" else (entry - last_close)) / slDist,
+            3,
+        )
+    return TradeUpdate(
+        closed=True, status="EXPIRED",
+        exit_price=last_close, exit_reason="expired",
+        closed_at=now.isoformat(),
+        pnl_r=pnl_r,
+        pnl_pct=round(((last_close - entry) if side == "LONG" else (entry - last_close)) / entry * 100, 4),
+    )
+
+
+def _update_to_dict(u: TradeUpdate) -> dict:
+    """Convert TradeUpdate dataclass to dict, omitting None fields (for PATCH)."""
+    out: dict = {"last_check_at": datetime.now(timezone.utc).isoformat()}
+    if u.hit_tp1: out["hit_tp1"] = True
+    if u.hit_tp2: out["hit_tp2"] = True
+    if u.hit_tp3: out["hit_tp3"] = True
+    if u.hit_sl:  out["hit_sl"]  = True
+    if u.high_after_open is not None: out["high_after_open"] = round(u.high_after_open, 2)
+    if u.low_after_open  is not None: out["low_after_open"]  = round(u.low_after_open, 2)
+    if u.closed:
+        out["status"]      = u.status
+        out["closed_at"]   = u.closed_at
+        out["exit_price"]  = round(u.exit_price, 2) if u.exit_price is not None else None
+        out["exit_reason"] = u.exit_reason
+        out["pnl_r"]       = u.pnl_r
+        out["pnl_pct"]     = u.pnl_pct
+    return out

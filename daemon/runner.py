@@ -6,6 +6,7 @@ import traceback
 from datetime import datetime, timezone
 
 from data.price_fetcher import fetch_xau, fetch_intermarket_bundle, fetch_realtime_xau_spot
+from daemon.trade_tracker import open_trade_if_eligible, update_open_trades
 from data.calendar_fetcher import in_news_blackout, upcoming_high_impact
 from data.cot_fetcher import latest_cot_signal
 from features.technical import add_all
@@ -127,6 +128,36 @@ def run_once(store: SettingsStore, settings: dict, log=print) -> dict:
     }
 
     bundle_id = store.push_signal_bundle(bundle)
+
+    # ── Forward-test layer: track open trades + open new ──────────────────────
+    # Order matters:
+    # 1. update_open_trades FIRST (close trades that hit SL/TP since last cycle).
+    # 2. THEN open_trade_if_eligible per style — UNIQUE INDEX (1 OPEN per style)
+    #    will correctly allow new trade only after old one closed.
+    try:
+        modified = update_open_trades(store, df_5m, log=log)
+        if modified > 0:
+            log(f"[tracker] updated {modified} open trades")
+    except Exception as e:
+        log(f"[tracker] update phase error: {e!r}")
+        traceback.print_exc()
+
+    try:
+        for style, sig_obj in (("scalper", sig_scalper), ("intraday", sig_intraday), ("swing", sig_swing)):
+            sig_dict = sig_obj.to_dict()
+            open_trade_if_eligible(
+                store=store,
+                style=style,
+                signal=sig_dict,
+                bundle_id=bundle_id,
+                regime=regime_label,
+                session=sess,
+                log=log,
+            )
+    except Exception as e:
+        log(f"[tracker] open phase error: {e!r}")
+        traceback.print_exc()
+
     elapsed = time.time() - started
     log(f"[runner] done in {elapsed:.1f}s | action={debate_dict.get('final_action')} "
         f"conf={debate_dict.get('confidence')} pushed_id={bundle_id}")

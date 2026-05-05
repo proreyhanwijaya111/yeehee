@@ -78,6 +78,87 @@ export async function getCalendarEvents(): Promise<CalendarEvent[]> {
   }))
 }
 
+// ── Active trades + portfolio (forward-test layer) ─────────────────────────────
+
+export type TradeStatus = 'OPEN' | 'TP1' | 'TP2' | 'TP3' | 'SL' | 'EXPIRED' | 'MANUAL'
+
+export interface ActiveTrade {
+  id: string
+  bundle_id:        string | null
+  style:            'scalper' | 'intraday' | 'swing'
+  side:             'LONG' | 'SHORT'
+  signal_strength:  string | null
+  confidence:       number | null
+  entry:            number
+  sl:               number
+  tp1:              number | null
+  tp2:              number | null
+  tp3:              number | null
+  status:           TradeStatus
+  hit_tp1:          boolean
+  hit_tp2:          boolean
+  hit_tp3:          boolean
+  hit_sl:           boolean
+  high_after_open:  number | null
+  low_after_open:   number | null
+  opened_at:        string
+  expiry_at:        string
+  closed_at:        string | null
+  exit_price:       number | null
+  exit_reason:      string | null
+  pnl_r:            number | null
+  pnl_pct:          number | null
+  reasons:          unknown[]
+  risks:            unknown[]
+  regime:           string | null
+  session:          string | null
+}
+
+export async function getActiveTrades(opts?: { status?: TradeStatus | 'all'; limit?: number }) {
+  const limit  = opts?.limit ?? 100
+  const status = opts?.status ?? 'all'
+  const filter = status === 'all' ? '' : `&status=eq.${status}`
+  const rows = await supabaseGet<ActiveTrade[]>(
+    `active_trades?select=*&order=opened_at.desc&limit=${limit}${filter}`,
+    { revalidate: 30 },
+  )
+  return rows ?? []
+}
+
+export interface PortfolioStats {
+  open_count:    number
+  closed_count:  number
+  wins:          number
+  losses:        number
+  expired:       number
+  win_rate:      number
+  avg_pnl_r:     number
+  total_pnl_r:   number
+  avg_win_r:     number
+  avg_loss_r:    number
+}
+
+export async function getPortfolioStats(): Promise<PortfolioStats | null> {
+  const rows = await supabaseGet<PortfolioStats[]>(
+    'portfolio_stats?select=*&user_id=eq.default&limit=1',
+    { revalidate: 30 },
+  )
+  if (!rows || rows.length === 0) return null
+  const r = rows[0]
+  return {
+    open_count:   Number(r.open_count   ?? 0),
+    closed_count: Number(r.closed_count ?? 0),
+    wins:         Number(r.wins         ?? 0),
+    losses:       Number(r.losses       ?? 0),
+    expired:      Number(r.expired      ?? 0),
+    win_rate:     Number(r.win_rate     ?? 0),
+    avg_pnl_r:    Number(r.avg_pnl_r    ?? 0),
+    total_pnl_r:  Number(r.total_pnl_r  ?? 0),
+    avg_win_r:    Number(r.avg_win_r    ?? 0),
+    avg_loss_r:   Number(r.avg_loss_r   ?? 0),
+  }
+}
+
 // ── Daemon heartbeat ────────────────────────────────────────────────────────────
 
 export async function getDaemonHeartbeatServer(): Promise<{
