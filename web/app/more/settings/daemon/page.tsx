@@ -1,10 +1,11 @@
 'use client'
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { ArrowLeft, Copy, Check, Terminal, Download, Loader2, Server, Eye, EyeOff, Key } from 'lucide-react'
+import { ArrowLeft, Copy, Check, Terminal, Download, Loader2, Server, Eye, EyeOff, Key, Crown, MoonStar, Cpu } from 'lucide-react'
 import {
   getAppSettings, getDaemonHeartbeat, isDaemonOnline,
-  type AppSettings, type DaemonHeartbeat,
+  getDaemonWorkers, getActiveWorkerId, setActiveWorkerId,
+  type AppSettings, type DaemonHeartbeat, type DaemonWorkerStatus,
 } from '@/lib/settings'
 
 const REPO_URL = 'https://github.com/proreyhanwijaya111/yeehee.git'
@@ -22,20 +23,45 @@ export default function DaemonPage() {
   const [activeTab, setActiveTab] = useState<'install' | 'update' | 'service'>('install')
   const [showSecrets, setShowSecrets] = useState(false)
 
+  // Multi-PC active-passive lock state (migration 007)
+  const [workers,    setWorkers]    = useState<DaemonWorkerStatus[]>([])
+  const [activeWid,  setActiveWid]  = useState<string | null>(null)
+  const [switchingWid, setSwitchingWid] = useState<string | null>(null)
+
   // Optional extra keys (multi-PC ready). Persisted to localStorage so user
   // doesn't have to retype every time. Empty string = "skip / use existing".
   const [openRouterKey, setOpenRouterKey] = useState('')
   const [twelveKey,     setTwelveKey]     = useState('')
   const [svcKey,        setSvcKey]        = useState('')
 
+  const refreshWorkers = async () => {
+    const [list, active] = await Promise.all([getDaemonWorkers(), getActiveWorkerId()])
+    setWorkers(list)
+    setActiveWid(active)
+  }
+
   useEffect(() => {
     Promise.all([getAppSettings(), getDaemonHeartbeat()]).then(([a, h]) => { setS(a); setHb(h) })
+    refreshWorkers()
     if (typeof window !== 'undefined') {
       setOpenRouterKey(localStorage.getItem(LS_OPENROUTER) || '')
       setTwelveKey(localStorage.getItem(LS_TWELVE) || '')
       setSvcKey(localStorage.getItem(LS_SVCKEY) || '')
     }
+    // Auto-refresh workers every 30s while on this page
+    const interval = setInterval(refreshWorkers, 30_000)
+    return () => clearInterval(interval)
   }, [])
+
+  const handleSwitchPrimary = async (workerId: string) => {
+    setSwitchingWid(workerId)
+    try {
+      const ok = await setActiveWorkerId(workerId)
+      if (ok) await refreshWorkers()
+    } finally {
+      setSwitchingWid(null)
+    }
+  }
 
   // Persist to localStorage on change (debounced via setTimeout in handler)
   const persistKey = (lsKey: string, value: string) => {
@@ -78,6 +104,65 @@ export default function DaemonPage() {
       </header>
 
       <div className="space-y-5">
+        {/* Multi-PC worker list (migration 007) */}
+        {workers.length > 0 && (
+          <Section
+            title={`Workers aktif (${workers.length})`}
+            sub="Multi-PC active-passive: hanya 1 PRIMARY yang push signal + buka trade. STANDBY workers cuma kirim heartbeat. Klik worker buat jadiin primary manual."
+          >
+            <div className="space-y-1.5">
+              {workers.map(w => {
+                const isPrimary  = activeWid === w.worker_id
+                const isOnline   = w.status === 'fresh' || w.status === 'recent'
+                const isSwitching = switchingWid === w.worker_id
+                const dotColor =
+                  w.status === 'fresh' ? 'bg-emerald-500' :
+                  w.status === 'recent' ? 'bg-amber-500' : 'bg-slate-500'
+                return (
+                  <button
+                    key={w.worker_id}
+                    onClick={() => isPrimary || isSwitching ? null : handleSwitchPrimary(w.worker_id)}
+                    disabled={isPrimary || isSwitching || !isOnline}
+                    className={`w-full text-left rounded-lg border transition-colors px-3 py-2.5 ${
+                      isPrimary
+                        ? 'bg-amber-950/30 border-amber-700/50'
+                        : 'bg-slate-900/60 border-slate-800 hover:border-slate-700 disabled:opacity-50'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dotColor}`} />
+                      {isPrimary
+                        ? <Crown size={13} className="text-amber-400 shrink-0" />
+                        : <MoonStar size={13} className="text-slate-500 shrink-0" />}
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[11px] font-mono text-slate-200 truncate">{w.worker_id}</p>
+                        <p className="text-[10px] text-slate-500 truncate">
+                          {w.hostname || '?'} · {Math.floor(w.heartbeat_age_seconds / 60)}m ago
+                          {w.cpu_percent !== null && <> · CPU {w.cpu_percent}%</>}
+                        </p>
+                      </div>
+                      <span className={`text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0 ${
+                        isPrimary
+                          ? 'bg-amber-700/40 text-amber-200'
+                          : isOnline
+                            ? 'bg-slate-800 text-slate-400'
+                            : 'bg-rose-900/40 text-rose-300'
+                      }`}>
+                        {isSwitching ? '...' : isPrimary ? 'PRIMARY' : isOnline ? 'STANDBY' : 'STALE'}
+                      </span>
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+            {!activeWid && workers.length > 0 && (
+              <p className="text-[10px] text-amber-400 mt-1.5">
+                Belum ada PRIMARY. Daemon akan auto-claim cycle berikutnya.
+              </p>
+            )}
+          </Section>
+        )}
+
         {/* Status pill (compact) */}
         <div className="bg-slate-900/60 border border-slate-800 rounded-xl px-3.5 py-3 flex items-center gap-3">
           <span className={`w-2 h-2 rounded-full shrink-0 ${

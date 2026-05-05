@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 
 from data.price_fetcher import fetch_xau, fetch_intermarket_bundle, fetch_realtime_xau_spot
 from daemon.trade_tracker import open_trade_if_eligible, update_open_trades
+from daemon.heartbeat import get_worker_id
 from data.calendar_fetcher import in_news_blackout, upcoming_high_impact
 from data.cot_fetcher import latest_cot_signal
 from features.technical import add_all
@@ -133,39 +134,66 @@ def run_once(store: SettingsStore, settings: dict, log=print, trigger_reason: st
         "_trigger_reason": trigger_reason,
     }
 
-    bundle_id = store.push_signal_bundle(bundle)
+    # ── Multi-PC active-passive lock (migration 007) ───────────────────────────
+    # Election: only PRIMARY worker pushes signal_bundles + opens trades.
+    # STANDBY workers still ran the analysis (above) for telemetry, but skip the
+    # mutating operations to avoid duplicate rows. They do still push heartbeat.
+    user_id   = settings.get("user_id", "default")
+    worker_id = get_worker_id()
+    is_primary, role_reason = store.is_primary_worker(user_id=user_id, worker_id=worker_id)
+    role_label = "PRIMARY" if is_primary else "STANDBY"
+    log(f"[runner] role={role_label} worker_id={worker_id} ({role_reason})")
 
-    # ── Forward-test layer: track open trades + open new ──────────────────────
-    # Order matters:
+    bundle_id = None
+    if is_primary:
+        bundle_id = store.push_signal_bundle(bundle)
+    else:
+        log("[runner] STANDBY mode — skip push_signal_bundle (primary handles it)")
+
+    # ── Per-style independence log (clarity for user) ──────────────────────────
+    # Each style is analyzed independently every cycle. Confluence + side determined
+    # solely from that style's own indicators. open_trade_if_eligible has per-style
+    # UNIQUE INDEX so one style being OPEN doesn't block another style from opening.
+    for style_name, sig_obj in (("scalper", sig_scalper), ("intraday", sig_intraday), ("swing", sig_swing)):
+        sd = sig_obj.to_dict()
+        log(
+            f"[runner] {style_name:8s} → {sd.get('side', 'FLAT'):5s} "
+            f"conf={sd.get('confidence', 0):.2f} confluence={sd.get('confluence_count', 0)}"
+        )
+
+    # ── Forward-test layer: ONLY PRIMARY mutates active_trades ────────────────
     # 1. update_open_trades FIRST (close trades that hit SL/TP since last cycle).
     # 2. THEN open_trade_if_eligible per style — UNIQUE INDEX (1 OPEN per style)
     #    will correctly allow new trade only after old one closed.
-    try:
-        modified = update_open_trades(store, df_5m, log=log)
-        if modified > 0:
-            log(f"[tracker] updated {modified} open trades")
-    except Exception as e:
-        log(f"[tracker] update phase error: {e!r}")
-        traceback.print_exc()
+    if is_primary:
+        try:
+            modified = update_open_trades(store, df_5m, log=log)
+            if modified > 0:
+                log(f"[tracker] updated {modified} open trades")
+        except Exception as e:
+            log(f"[tracker] update phase error: {e!r}")
+            traceback.print_exc()
 
-    try:
-        for style, sig_obj in (("scalper", sig_scalper), ("intraday", sig_intraday), ("swing", sig_swing)):
-            sig_dict = sig_obj.to_dict()
-            open_trade_if_eligible(
-                store=store,
-                style=style,
-                signal=sig_dict,
-                bundle_id=bundle_id,
-                regime=regime_label,
-                session=sess,
-                log=log,
-            )
-    except Exception as e:
-        log(f"[tracker] open phase error: {e!r}")
-        traceback.print_exc()
+        try:
+            for style, sig_obj in (("scalper", sig_scalper), ("intraday", sig_intraday), ("swing", sig_swing)):
+                sig_dict = sig_obj.to_dict()
+                open_trade_if_eligible(
+                    store=store,
+                    style=style,
+                    signal=sig_dict,
+                    bundle_id=bundle_id,
+                    regime=regime_label,
+                    session=sess,
+                    log=log,
+                )
+        except Exception as e:
+            log(f"[tracker] open phase error: {e!r}")
+            traceback.print_exc()
+    else:
+        log("[tracker] STANDBY mode — skip update_open_trades + open_trade_if_eligible")
 
     elapsed = time.time() - started
-    log(f"[runner] done in {elapsed:.1f}s | action={debate_dict.get('final_action')} "
+    log(f"[runner] done in {elapsed:.1f}s | role={role_label} action={debate_dict.get('final_action')} "
         f"conf={debate_dict.get('confidence')} pushed_id={bundle_id}")
     bundle["_bundle_id"] = bundle_id
     bundle["_elapsed_s"] = round(elapsed, 1)

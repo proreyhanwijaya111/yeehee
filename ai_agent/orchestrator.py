@@ -10,6 +10,23 @@ import os
 from datetime import datetime, timezone
 from typing import Optional
 
+
+def _parse_iso(ts: object) -> Optional[datetime]:
+    """Parse Supabase ISO timestamp ('2026-05-05T07:23:01.234567+00:00') to
+    timezone-aware datetime. Returns None on any parse failure."""
+    if not ts:
+        return None
+    s = str(ts)
+    # Python 3.11+ fromisoformat handles 'Z' suffix, earlier versions need stripping
+    s = s.replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except (ValueError, TypeError):
+        return None
+
 from ai_agent.llm_router import LLMRouter
 from ai_agent.agents import (
     AgentRunConfig, AGENT_NAMES, AGENT_LABELS,
@@ -136,6 +153,11 @@ class SettingsStore:
     # ── Daemon heartbeat ──
 
     def push_heartbeat(self, user_id: str = "default", **fields) -> None:
+        """Upsert daemon heartbeat. Multi-PC ready (migration 007):
+        on_conflict=(user_id, worker_id) so each worker keeps its own row.
+        Falls back to user_id-only on_conflict if migration 007 not yet applied
+        (i.e. unique(user_id) constraint still active).
+        """
         if not self._client:
             return
         # Migration safety: trigger_reason (005) + worker_id (006) might not be
@@ -143,21 +165,131 @@ class SettingsStore:
         payload = {"user_id": user_id, "updated_at": datetime.now(timezone.utc).isoformat(), **fields}
         optional_cols = ("trigger_reason", "worker_id")
 
-        def _try_upsert(p: dict) -> bool:
+        def _try_upsert(p: dict, conflict_target: str) -> bool:
             try:
-                self._client.from_("daemon_heartbeat").upsert(p, on_conflict="user_id").execute()
+                self._client.from_("daemon_heartbeat").upsert(p, on_conflict=conflict_target).execute()
                 return True
             except Exception as exc:
                 msg = str(exc).lower()
-                # Detect column-missing errors and progressively drop optional fields
+                # Detect column-missing errors → drop optional fields + retry
                 for col in optional_cols:
                     if col in msg and col in p:
                         p.pop(col, None)
-                        return _try_upsert(p)
-                # If error is about a different column, give up silently (heartbeat is non-critical)
+                        return _try_upsert(p, conflict_target)
+                # If conflict target not supported (migration 007 not applied),
+                # fall back to user_id only
+                if conflict_target != "user_id" and ("constraint" in msg or "conflict" in msg or "duplicate key" in msg):
+                    return _try_upsert(p, "user_id")
                 return False
 
-        _try_upsert(payload)
+        # Multi-PC default: per-worker row. Fall back to legacy single-row if migration not applied.
+        target = "user_id,worker_id" if payload.get("worker_id") else "user_id"
+        _try_upsert(payload, target)
+
+    # ── Active worker election (multi-PC active-passive lock, migration 007) ──
+
+    def is_primary_worker(self, user_id: str, worker_id: str,
+                          stale_seconds: int = 600) -> tuple[bool, str]:
+        """Election: should THIS worker push signal_bundles + open trades?
+
+        Logic:
+            active_worker_id NULL                       -> claim, become PRIMARY
+            active_worker_id == worker_id               -> we already are PRIMARY
+            active_worker_id != worker_id, stale > N    -> failover claim, become PRIMARY
+            active_worker_id != worker_id, fresh        -> STANDBY (skip work)
+
+        Returns: (is_primary, reason). reason is human-readable for logging.
+        Graceful fallback: kalau migration 007 belum applied OR DB unreachable,
+        default to True (assume single-worker mode = always primary).
+        """
+        if not self._client or not worker_id:
+            return True, "no_db_or_no_worker_id_assumed_primary"
+
+        try:
+            r = (
+                self._client.from_("app_settings")
+                .select("active_worker_id, active_claimed_at")
+                .eq("user_id", user_id)
+                .limit(1)
+                .execute()
+            )
+            rows = r.data or []
+            if not rows:
+                # No app_settings row at all → claim
+                return self._claim_primary(user_id, worker_id, reason="no_settings_row")
+            row = rows[0]
+            active = row.get("active_worker_id")
+            claimed_at = row.get("active_claimed_at")
+        except Exception as e:
+            # Migration not applied yet OR DB error → assume primary (single-PC mode)
+            msg = str(e).lower()
+            if "active_worker_id" in msg or "column" in msg:
+                return True, "migration_007_not_applied_assumed_primary"
+            return True, f"db_error_assumed_primary ({type(e).__name__})"
+
+        # No primary set → claim
+        if not active:
+            return self._claim_primary(user_id, worker_id, reason="no_active_worker")
+
+        # I am primary → keep going
+        if active == worker_id:
+            return True, "already_primary"
+
+        # Other worker is primary. Check if their heartbeat is stale.
+        try:
+            r = (
+                self._client.from_("daemon_heartbeat")
+                .select("updated_at")
+                .eq("user_id", user_id)
+                .eq("worker_id", active)
+                .limit(1)
+                .execute()
+            )
+            hb_rows = r.data or []
+        except Exception:
+            hb_rows = []
+
+        if hb_rows:
+            try:
+                hb_ts = _parse_iso(hb_rows[0].get("updated_at"))
+                if hb_ts is None:
+                    return self._claim_primary(user_id, worker_id, reason=f"failover_unparseable_ts_for_{active[:12]}")
+                age = (datetime.now(timezone.utc) - hb_ts).total_seconds()
+                if age > stale_seconds:
+                    return self._claim_primary(
+                        user_id, worker_id,
+                        reason=f"failover_stale_{int(age)}s_old_primary={active[:12]}",
+                    )
+            except Exception:
+                pass
+        else:
+            # Primary set but no heartbeat row → likely never started, claim
+            return self._claim_primary(
+                user_id, worker_id,
+                reason=f"failover_no_heartbeat_for_{active[:12]}",
+            )
+
+        # Other worker is primary AND fresh → we are STANDBY
+        return False, f"standby_primary_is_{active[:12]}"
+
+    def _claim_primary(self, user_id: str, worker_id: str, reason: str) -> tuple[bool, str]:
+        """Atomically attempt to claim primary role. Race-tolerant: if another
+        worker claimed at same moment, last writer wins (Supabase upsert is atomic
+        per row). On column-missing error (migration 007 not applied), assume primary.
+        """
+        if not self._client:
+            return True, "no_db_assumed_primary"
+        try:
+            self._client.from_("app_settings").update({
+                "active_worker_id":  worker_id,
+                "active_claimed_at": datetime.now(timezone.utc).isoformat(),
+            }).eq("user_id", user_id).execute()
+            return True, f"claimed ({reason})"
+        except Exception as e:
+            msg = str(e).lower()
+            if "active_worker_id" in msg or "column" in msg:
+                return True, "migration_007_not_applied_assumed_primary"
+            return True, f"claim_failed_assumed_primary ({type(e).__name__})"
 
     # ── Push signal bundle ──
 
