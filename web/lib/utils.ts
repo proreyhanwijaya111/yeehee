@@ -145,3 +145,45 @@ export function fmtUSD(v: number): string {
 export function fmtR(v: number): string {
   return v.toFixed(1) + '×'
 }
+
+// ── Opsi B: trigger_reason → human readable Indonesian label ───────────────────
+//
+// Daemon writes machine-readable tags ('price_spike_up_0.42pct', 'ema9_21_bullish_cross', etc).
+// UI shows user-friendly text. Returns { label, kind } where kind drives badge color.
+
+export type TriggerKind = 'scheduled' | 'momentum' | 'cross' | 'volatility' | 'volume' | 'news' | 'manual' | 'unknown'
+
+export function formatTriggerReason(reason?: string | null): { label: string; kind: TriggerKind } {
+  if (!reason || reason === 'scheduled') {
+    return { label: 'auto-refresh 5 menit', kind: 'scheduled' }
+  }
+  if (reason === 'manual') {
+    return { label: 'manual refresh', kind: 'manual' }
+  }
+  if (reason.startsWith('price_spike_')) {
+    // 'price_spike_up_0.42pct' → "spike harga ↑ 0.42%"
+    const m = reason.match(/^price_spike_(up|down)_([\d.]+)pct$/)
+    if (m) {
+      const arrow = m[1] === 'up' ? '↑' : '↓'
+      return { label: `spike harga ${arrow} ${m[2]}%`, kind: 'momentum' }
+    }
+    return { label: 'spike harga', kind: 'momentum' }
+  }
+  if (reason.startsWith('ema9_21_')) {
+    if (reason.includes('bullish'))  return { label: 'EMA9 cross ke atas',   kind: 'cross' }
+    if (reason.includes('bearish'))  return { label: 'EMA9 cross ke bawah',  kind: 'cross' }
+    return { label: 'EMA cross', kind: 'cross' }
+  }
+  if (reason.startsWith('atr_explosion_')) {
+    const m = reason.match(/^atr_explosion_([\d.]+)x$/)
+    return { label: `volatilitas meledak ${m ? m[1] + 'x ATR' : ''}`.trim(), kind: 'volatility' }
+  }
+  if (reason.startsWith('volume_spike_')) {
+    const m = reason.match(/^volume_spike_([\d.]+)x$/)
+    return { label: `volume spike ${m ? m[1] + 'x' : ''}`.trim(), kind: 'volume' }
+  }
+  if (reason === 'blackout_exit') {
+    return { label: 'pasca-news, blackout selesai', kind: 'news' }
+  }
+  return { label: reason, kind: 'unknown' }
+}

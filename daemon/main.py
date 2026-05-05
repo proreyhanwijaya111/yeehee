@@ -42,6 +42,17 @@ from ai_agent.orchestrator import SettingsStore  # noqa: E402
 from daemon.runner import run_once  # noqa: E402
 from daemon.mira import MiraConsumer  # noqa: E402
 from daemon.heartbeat import push_heartbeat, VERSION  # noqa: E402
+from daemon.momentum_detector import MomentumWatcher, TriggerEvent  # noqa: E402
+
+# Opsi B: poll cadence for the momentum watcher (seconds).
+# Twelve Data free tier = 800 req/day. 15s poll = 5,760 req/day → exceeds free.
+# Use 30s poll = 2,880 req/day → still over but with the price cache + yfinance
+# fallback we can avoid hitting Twelve Data every cycle. Adjust if hit quota.
+WATCHER_POLL_SECONDS = 30
+
+# Min seconds between any full-pipeline runs (prevent trigger storms from blowing
+# LLM token budget). Even if 5 triggers fire in 5 minutes, we cap at 1 per minute.
+MIN_FULL_EVAL_INTERVAL_S = 60
 
 
 _SHUTDOWN = threading.Event()
@@ -55,9 +66,42 @@ def banner():
 
 
 def signal_loop(store: SettingsStore, log=print):
-    """Generate signals at the configured interval. Self-correcting."""
-    last_run = 0.0
+    """Generate signals — Opsi B: scheduled cycle + event-driven momentum trigger.
+
+    Flow:
+      Every WATCHER_POLL_SECONDS:
+        1. Quick price + 5m feature poll (cheap)
+        2. MomentumWatcher.evaluate(...) checks trigger conditions
+        3. If trigger fires AND last_full_eval > MIN_FULL_EVAL_INTERVAL_S ago:
+             → run_once() with trigger_reason
+        4. Else if scheduled interval passed:
+             → run_once() with trigger_reason='scheduled'
+        5. Else: sleep until next poll
+    """
+    from data.price_fetcher import fetch_realtime_xau_spot, fetch_xau
+    from data.calendar_fetcher import in_news_blackout
+    from features.technical import add_all
+
     last_signal_at: str | None = None
+    watcher = MomentumWatcher(log=log)
+
+    def _run_full(reason: str) -> None:
+        """Execute a full run_once and update watcher state. Catches errors."""
+        nonlocal last_signal_at
+        log(f"[signal] starting cycle (reason={reason})")
+        try:
+            settings_local = store.app_settings()
+            bundle = run_once(store, settings_local, log=log, trigger_reason=reason)
+            last_signal_at = bundle.get("timestamp")
+            watcher.mark_full_eval()
+            push_heartbeat(store, last_signal_at=last_signal_at, error=None,
+                           trigger_reason=reason)
+        except Exception as e:
+            log(f"[signal] cycle error ({reason}): {e!r}")
+            traceback.print_exc()
+            push_heartbeat(store, last_signal_at=last_signal_at,
+                           error=f"signal cycle ({reason}): {e}",
+                           trigger_reason=reason)
 
     while not _SHUTDOWN.is_set():
         try:
@@ -70,23 +114,36 @@ def signal_loop(store: SettingsStore, log=print):
                 continue
 
             now = time.time()
-            if now - last_run < interval_min * 60:
-                _wait_or_shutdown(5)
-                continue
+            scheduled_due = (now - watcher.last_full_eval_at) >= interval_min * 60
+            min_interval_ok = (now - watcher.last_full_eval_at) >= MIN_FULL_EVAL_INTERVAL_S
 
-            log(f"[signal] starting cycle (interval={interval_min}min)")
+            # Quick poll for momentum detection. Failures here = skip this poll, don't crash.
+            trigger: TriggerEvent | None = None
             try:
-                bundle = run_once(store, settings, log=log)
-                last_signal_at = bundle.get("timestamp")
-                # Push heartbeat dengan last_signal_at setelah cycle sukses,
-                # supaya UI /more/settings bisa nampilin "signal X menit lalu"
-                push_heartbeat(store, last_signal_at=last_signal_at, error=None)
+                # Cheap poll: real-time price + cached 5m bars (use_cache=True)
+                rt = fetch_realtime_xau_spot()
+                price_now = float(rt.get("price") or 0)
+                if price_now > 0:
+                    df_5m_quick = add_all(fetch_xau("5m"))
+                    in_blk_now, _ = in_news_blackout(datetime.now(timezone.utc)) \
+                        if settings.get("enable_news_blackout", True) else (False, None)
+                    trigger = watcher.evaluate(
+                        price_now=price_now,
+                        df_5m=df_5m_quick,
+                        in_blackout_now=bool(in_blk_now),
+                    )
             except Exception as e:
-                log(f"[signal] cycle error: {e!r}")
-                traceback.print_exc()
-                push_heartbeat(store, last_signal_at=last_signal_at,
-                               error=f"signal cycle: {e}")
-            last_run = time.time()
+                # Don't break the loop on poll failure — just log and proceed
+                log(f"[signal] poll error: {e!r}")
+
+            # Decide what to run
+            if trigger and min_interval_ok:
+                _run_full(reason=trigger.reason)
+            elif scheduled_due:
+                _run_full(reason="scheduled")
+            # else: just continue polling
+
+            _wait_or_shutdown(WATCHER_POLL_SECONDS)
         except Exception as e:
             log(f"[signal] outer error: {e!r}")
             traceback.print_exc()

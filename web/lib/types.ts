@@ -102,6 +102,8 @@ export interface SignalBundle {
   final_action:     TradeAction
   signal_strength:  SignalStrength
   confidence:       number
+  /** Opsi B: why this cycle ran. 'scheduled' | 'price_spike_up_X.XXpct' | 'ema9_21_bullish_cross' | 'atr_explosion_X.Xx' | 'volume_spike_X.Xx' | 'blackout_exit' | 'manual' */
+  trigger_reason?:  string
 }
 
 export interface PositionPlan {

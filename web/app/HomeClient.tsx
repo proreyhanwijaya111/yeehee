@@ -1,6 +1,6 @@
 'use client'
 import useSWR from 'swr'
-import { RefreshCw, Coins } from 'lucide-react'
+import { RefreshCw, Coins, Zap } from 'lucide-react'
 import { getSignals } from '@/lib/api'
 import HeroCard from '@/components/HeroCard'
 import MacroSnapshot from '@/components/MacroSnapshot'
@@ -10,6 +10,7 @@ import LiveTicker from '@/components/LiveTicker'
 import PortfolioGlance from '@/components/PortfolioGlance'
 import { ErrorState } from '@/components/LoadingSpinner'
 import { clearApiCache } from '@/lib/api'
+import { formatTriggerReason } from '@/lib/utils'
 import type { SignalBundle } from '@/lib/types'
 import type { ActiveTrade, PortfolioStats } from '@/lib/server-api'
 
@@ -116,11 +117,23 @@ export default function HomeClient({
 
         <MacroSnapshot intermarket={data.intermarket} cot={data.cot} />
 
-        <p className="text-center text-[10px] text-slate-600 pt-1 pb-1">
-          Auto-refresh 5 menit · personal use only
-        </p>
+        <FooterTrigger trigger_reason={data.trigger_reason} />
       </div>
     </main>
+  )
+}
+
+function FooterTrigger({ trigger_reason }: { trigger_reason?: string }) {
+  const t = formatTriggerReason(trigger_reason)
+  const isMomentum = t.kind !== 'scheduled'
+  return (
+    <p className="text-center text-[10px] pt-1 pb-1 flex items-center justify-center gap-1">
+      {isMomentum && <Zap size={10} className="text-amber-400" />}
+      <span className={isMomentum ? 'text-amber-300 font-semibold' : 'text-slate-600'}>
+        {t.label}
+      </span>
+      <span className="text-slate-600"> · personal use only</span>
+    </p>
   )
 }
 

@@ -138,11 +138,17 @@ class SettingsStore:
     def push_heartbeat(self, user_id: str = "default", **fields) -> None:
         if not self._client:
             return
+        # Opsi B: trigger_reason field requires migration 005. Retry without if missing.
+        payload = {"user_id": user_id, "updated_at": datetime.now(timezone.utc).isoformat(), **fields}
         try:
-            payload = {"user_id": user_id, "updated_at": datetime.now(timezone.utc).isoformat(), **fields}
             self._client.from_("daemon_heartbeat").upsert(payload, on_conflict="user_id").execute()
-        except Exception:
-            pass
+        except Exception as e:
+            if "trigger_reason" in str(e).lower() or "column" in str(e).lower():
+                payload.pop("trigger_reason", None)
+                try:
+                    self._client.from_("daemon_heartbeat").upsert(payload, on_conflict="user_id").execute()
+                except Exception:
+                    pass
 
     # ── Push signal bundle ──
 
@@ -169,8 +175,18 @@ class SettingsStore:
                 "blackout_event":  bundle.get("blackout_event"),
                 "upcoming_events": bundle.get("upcoming_events"),
                 "ai_pm_used":      bundle.get("ai_pm_used", False),
+                # Opsi B: event-driven momentum trigger reason
+                "trigger_reason":  bundle.get("_trigger_reason", "scheduled"),
             }
-            r = self._client.from_("signal_bundles").insert(payload).execute()
+            try:
+                r = self._client.from_("signal_bundles").insert(payload).execute()
+            except Exception as e:
+                # Graceful: if migration 005 not applied, retry without trigger_reason
+                if "trigger_reason" in str(e).lower() or "column" in str(e).lower():
+                    payload.pop("trigger_reason", None)
+                    r = self._client.from_("signal_bundles").insert(payload).execute()
+                else:
+                    raise
             new_row = (r.data or [{}])[0]
             bundle_id = new_row.get("id")
 

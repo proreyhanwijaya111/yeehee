@@ -220,6 +220,8 @@ function mapBundleRowToSignalBundle(row: Record<string, unknown>): SignalBundle 
     final_action:    (row.final_action as TradeAction) ?? 'FLAT',
     signal_strength: (row.signal_strength as SignalStrength) ?? 'FLAT',
     confidence:      Number(row.confidence ?? 0),
+    // Opsi B: trigger_reason. May be null on legacy rows (pre-migration 005).
+    trigger_reason:  row.trigger_reason ? String(row.trigger_reason) : undefined,
   }
 }
 

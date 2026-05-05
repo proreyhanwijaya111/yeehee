@@ -51,12 +51,18 @@ def _local_ip() -> str | None:
 
 def push_heartbeat(store, last_signal_at: str | None = None,
                    last_mira_job_at: str | None = None,
-                   error: str | None = None) -> None:
+                   error: str | None = None,
+                   trigger_reason: str | None = None) -> None:
+    """Opsi B: trigger_reason indicates why the last cycle ran
+    ('scheduled', 'price_spike_up_0.42pct', 'ema9_21_bullish_cross', etc).
+    Surfaces in UI so user knows real-time vs schedule cadence."""
     fields = gather_health()
     if last_signal_at:
         fields["last_signal_at"] = last_signal_at
     if last_mira_job_at:
         fields["last_mira_job_at"] = last_mira_job_at
+    if trigger_reason:
+        fields["trigger_reason"] = trigger_reason
     if error:
         fields["error"] = error[:500]
     else:

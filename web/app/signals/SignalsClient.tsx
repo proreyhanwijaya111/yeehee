@@ -1,11 +1,11 @@
 'use client'
 import useSWR from 'swr'
-import { TrendingUp } from 'lucide-react'
+import { TrendingUp, Zap, Clock } from 'lucide-react'
 import { getSignals } from '@/lib/api'
 import SignalCard from '@/components/SignalCard'
 import MacroSnapshot from '@/components/MacroSnapshot'
 import { ErrorState } from '@/components/LoadingSpinner'
-import { STRENGTH_LABEL, STRENGTH_COLOR, fmtPrice } from '@/lib/utils'
+import { STRENGTH_LABEL, STRENGTH_COLOR, fmtPrice, formatTriggerReason } from '@/lib/utils'
 import type { SignalBundle } from '@/lib/types'
 
 interface Props {
@@ -45,6 +45,8 @@ export default function SignalsClient({ initialBundle, serverError }: Props) {
   const { signal_strength, confidence } = data
   const strColor = STRENGTH_COLOR[signal_strength]
   const strLabel = STRENGTH_LABEL[signal_strength]
+  const trigger = formatTriggerReason(data.trigger_reason)
+  const isMomentum = trigger.kind !== 'scheduled'
 
   return (
     <main className="max-w-lg mx-auto px-4 pt-4 pb-2 animate-fade-in">
@@ -52,9 +54,16 @@ export default function SignalsClient({ initialBundle, serverError }: Props) {
         <div className="w-8 h-8 rounded-lg bg-sky-700/30 border border-sky-600/30 flex items-center justify-center">
           <TrendingUp size={16} className="text-sky-300" />
         </div>
-        <div>
+        <div className="flex-1 min-w-0">
           <h1 className="text-lg font-black text-slate-100 leading-tight">Sinyal sekarang</h1>
-          <p className="text-[11px] text-slate-500">3 gaya trading · auto-refresh 5 menit</p>
+          <p className="text-[11px] text-slate-500 flex items-center gap-1.5">
+            {isMomentum
+              ? <Zap size={11} className="text-amber-400 shrink-0" />
+              : <Clock size={11} className="text-slate-500 shrink-0" />}
+            <span className={isMomentum ? 'text-amber-300 font-semibold' : ''}>
+              {trigger.label}
+            </span>
+          </p>
         </div>
       </header>
 

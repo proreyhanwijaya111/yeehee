@@ -22,8 +22,12 @@ from ai_agent.orchestrator import (
 )
 
 
-def run_once(store: SettingsStore, settings: dict, log=print) -> dict:
-    """Run one signal cycle. Returns the bundle dict."""
+def run_once(store: SettingsStore, settings: dict, log=print, trigger_reason: str = "scheduled") -> dict:
+    """Run one signal cycle. Returns the bundle dict.
+
+    Opsi B: trigger_reason indicates why this cycle ran ('scheduled', 'price_spike',
+    'ema_cross', etc). Persisted to signal_bundles.trigger_reason for UI display.
+    """
     started = time.time()
     now = datetime.now(timezone.utc)
 
@@ -125,6 +129,8 @@ def run_once(store: SettingsStore, settings: dict, log=print) -> dict:
         "swing":          sig_swing.to_dict(),
         "debate":         debate_dict,
         "ai_pm_used":     use_llm,
+        # Opsi B: persisted to signal_bundles.trigger_reason
+        "_trigger_reason": trigger_reason,
     }
 
     bundle_id = store.push_signal_bundle(bundle)
