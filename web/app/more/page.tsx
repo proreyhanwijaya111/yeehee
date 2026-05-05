@@ -1,7 +1,7 @@
 import Link from 'next/link'
 import {
   Settings, Server, Brain, Cpu, Send, FlaskConical, BookOpen, Newspaper,
-  Calculator, ChevronRight, Github, ExternalLink, Sparkles,
+  Calculator, ChevronRight, Github, ExternalLink, Sparkles, Zap,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -38,11 +38,12 @@ const SECTIONS: Section[] = [
   {
     title: 'Konfigurasi sistem',
     items: [
-      { href: '/more/settings',         icon: Settings, label: 'Pengaturan',     desc: 'Provider, agent, daemon, telegram' },
-      { href: '/more/settings/llm',     icon: Brain,    label: 'LLM Provider',   desc: 'API key & default model' },
-      { href: '/more/settings/agents',  icon: Cpu,      label: '9 AI Agent',     desc: 'Pipeline + per-agent override' },
-      { href: '/more/settings/daemon',  icon: Server,   label: 'Daemon worker',  desc: 'Generate script untuk PC rumah' },
-      { href: '/more/settings/telegram',icon: Send,     label: 'Telegram bot',   desc: 'Push notifikasi sinyal ke HP' },
+      { href: '/more/settings',          icon: Settings, label: 'Pengaturan',     desc: 'Provider, agent, daemon, telegram' },
+      { href: '/more/settings/llm',      icon: Brain,    label: 'LLM Provider',   desc: 'API key & default model' },
+      { href: '/more/settings/agents',   icon: Cpu,      label: '9 AI Agent',     desc: 'Pipeline + per-agent override' },
+      { href: '/more/settings/daemon',   icon: Server,   label: 'Daemon worker',  desc: 'Generate script untuk PC rumah' },
+      { href: '/more/settings/execution',icon: Zap,      label: 'Execution & EA', desc: 'Auto-trade MT5: risk, BEP, trailing, daily cap', badge: 'NEW' },
+      { href: '/more/settings/telegram', icon: Send,     label: 'Telegram bot',   desc: 'Push notifikasi sinyal ke HP' },
     ],
   },
   {

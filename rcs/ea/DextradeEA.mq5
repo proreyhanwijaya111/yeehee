@@ -1,39 +1,77 @@
 //+------------------------------------------------------------------+
 //|                                                  DextradeEA.mq5  |
-//|                                       yeehee / dextrade — v0.1.0 |
+//|                                       yeehee / dextrade — v0.2.0 |
 //|                                                                  |
-//| RCS auto-executor for XAU/USD (and related symbols).             |
-//|                                                                  |
-//| Polls home PC FastAPI for PENDING_PICKUP signals, executes via   |
-//| OrderSend, reports result back to /api/ea/report.                |
+//| RCS auto-executor with:                                          |
+//|  - Dynamic config polling from FastAPI (no EA restart for tweak) |
+//|  - Break-even SL automation                                      |
+//|  - Trailing stop                                                 |
+//|  - Max trades per day cap                                        |
+//|  - Daily loss kill switch                                        |
+//|  - Multi-source confluence gating (signal must be PENDING_PICKUP)|
 //|                                                                  |
 //| SAFETY DEFAULTS:                                                 |
-//|   EnableExecution = false  (no real orders until explicitly on)  |
-//|   EnablePaperMode = true   (logs only)                           |
-//|   MaxOpenPositions = 1     (cap concurrent trades)               |
-//|   DailyLossPct = 5%        (kill switch)                         |
+//|   EnableExecution = false (must be flipped ON via UI)            |
+//|   EnablePaperMode = true  (logs only)                            |
 //+------------------------------------------------------------------+
 #property copyright "yeehee / dextrade"
 #property link      "https://yeehee.vercel.app"
-#property version   "0.1.0"
+#property version   "0.2.0"
 #property strict
 
 #include <Trade\Trade.mqh>
 
 // ============================================================================
-// USER INPUTS
+// USER INPUTS (initial values — overridden by API config every poll)
 // ============================================================================
-input string  ApiBaseUrl          = "http://localhost:8001";  // home PC FastAPI
+input string  ApiBaseUrl          = "http://localhost:8001";
 input string  EaInstanceId        = "ea-mt5-pcrumah-1";
-input double  RiskPercentPerTrade = 1.0;
-input int     MinConfidencePct    = 65;
-input bool    EnableExecution     = false;       // SAFETY: false default
-input bool    EnablePaperMode     = true;        // SAFETY: true default
 input int     PollIntervalSec     = 30;
-input int     MaxOpenPositions    = 1;
-input double  DailyLossPct        = 5.0;
-input int     SlippagePoints      = 30;          // max acceptable slippage
-input ulong   MagicNumber         = 20260505;    // unique magic for this EA
+input ulong   MagicNumber         = 20260505;
+input int     SlippagePoints      = 30;
+
+// ============================================================================
+// DYNAMIC CONFIG (refreshed from API every poll)
+// ============================================================================
+struct ApiConfig {
+    bool   enable_execution;
+    bool   enable_paper;
+    int    max_open_positions;
+    int    max_trades_per_day;
+    int    trades_today;
+    int    trades_remaining;
+    double daily_loss_pct;
+    int    min_confidence_pct;
+    double risk_per_trade_pct;
+    bool   enable_break_even;
+    int    break_even_trigger_pips;
+    int    break_even_lock_pips;
+    bool   enable_trailing;
+    int    trailing_trigger_pips;
+    int    trailing_distance_pips;
+};
+
+ApiConfig g_config;
+
+// Defaults if API unreachable on first poll
+void SetSafeDefaults()
+{
+    g_config.enable_execution        = false;   // MUST be explicitly enabled via UI
+    g_config.enable_paper            = true;
+    g_config.max_open_positions      = 1;
+    g_config.max_trades_per_day      = 5;
+    g_config.trades_today            = 0;
+    g_config.trades_remaining        = 5;
+    g_config.daily_loss_pct          = 5.0;
+    g_config.min_confidence_pct      = 65;
+    g_config.risk_per_trade_pct      = 1.0;
+    g_config.enable_break_even       = true;
+    g_config.break_even_trigger_pips = 50;
+    g_config.break_even_lock_pips    = 5;
+    g_config.enable_trailing         = true;
+    g_config.trailing_trigger_pips   = 100;
+    g_config.trailing_distance_pips  = 30;
+}
 
 // ============================================================================
 // GLOBAL STATE
@@ -43,27 +81,35 @@ datetime g_starting_balance_date = 0;
 double   g_starting_balance      = 0;
 bool     g_kill_switch_active    = false;
 datetime g_last_heartbeat        = 0;
+datetime g_last_config_poll      = 0;
+int      g_config_poll_interval  = 60;   // refresh API config every 60s
 
 // ============================================================================
 // INITIALIZATION
 // ============================================================================
 int OnInit()
 {
-    PrintFormat("[DextradeEA] v0.1.0 init | EnableExecution=%s EnablePaperMode=%s",
-                EnableExecution ? "true" : "false",
-                EnablePaperMode ? "true" : "false");
+    Print("[DextradeEA] v0.2.0 init");
+    SetSafeDefaults();
+    PollConfig();   // initial fetch
 
-    // Set magic for trade tracking
+    PrintFormat("[DextradeEA] config: exec=%s paper=%s max_open=%d max_per_day=%d risk=%.2f%% BEP=%s trail=%s",
+                g_config.enable_execution ? "true" : "false",
+                g_config.enable_paper ? "true" : "false",
+                g_config.max_open_positions, g_config.max_trades_per_day,
+                g_config.risk_per_trade_pct,
+                g_config.enable_break_even ? "true" : "false",
+                g_config.enable_trailing ? "true" : "false");
+
     trade.SetExpertMagicNumber(MagicNumber);
     trade.SetDeviationInPoints(SlippagePoints);
-    trade.SetTypeFilling(ORDER_FILLING_IOC);   // immediate-or-cancel for liquid pairs
+    trade.SetTypeFilling(ORDER_FILLING_IOC);
 
     g_starting_balance      = AccountInfoDouble(ACCOUNT_BALANCE);
     g_starting_balance_date = TimeCurrent();
     PrintFormat("[DextradeEA] starting_balance=$%.2f account=%I64d",
                 g_starting_balance, AccountInfoInteger(ACCOUNT_LOGIN));
 
-    // Verify symbol available
     if(!SymbolSelect(_Symbol, true))
     {
         Print("[DextradeEA] FAIL: symbol ", _Symbol, " not selectable");
@@ -74,9 +120,6 @@ int OnInit()
     return INIT_SUCCEEDED;
 }
 
-// ============================================================================
-// DEINITIALIZATION
-// ============================================================================
 void OnDeinit(const int reason)
 {
     EventKillTimer();
@@ -84,11 +127,29 @@ void OnDeinit(const int reason)
 }
 
 // ============================================================================
-// MAIN POLLING LOOP
+// TICK LOOP — manage open positions (BEP + trailing every tick)
+// ============================================================================
+void OnTick()
+{
+    if(g_config.enable_break_even || g_config.enable_trailing)
+    {
+        ManageOpenPositions();
+    }
+}
+
+// ============================================================================
+// TIMER LOOP — poll API for new signals + refresh config
 // ============================================================================
 void OnTimer()
 {
-    // 1. Reset starting_balance daily (so DailyLossPct measures within day)
+    // Refresh config from API periodically (no EA restart needed)
+    if(TimeCurrent() - g_last_config_poll > g_config_poll_interval)
+    {
+        PollConfig();
+        g_last_config_poll = TimeCurrent();
+    }
+
+    // Daily reset
     MqlDateTime today, start_dt;
     TimeToStruct(TimeCurrent(), today);
     TimeToStruct(g_starting_balance_date, start_dt);
@@ -100,14 +161,10 @@ void OnTimer()
         PrintFormat("[DextradeEA] new day — reset starting_balance=$%.2f", g_starting_balance);
     }
 
-    // 2. Kill switch check
-    if(g_kill_switch_active)
-    {
-        return;
-    }
-    double current_balance = AccountInfoDouble(ACCOUNT_BALANCE);
-    double daily_pnl_pct   = ((current_balance - g_starting_balance) / g_starting_balance) * 100.0;
-    if(daily_pnl_pct <= -DailyLossPct)
+    // Kill switch (daily loss)
+    if(g_kill_switch_active) return;
+    double daily_pnl_pct = ((AccountInfoDouble(ACCOUNT_BALANCE) - g_starting_balance) / g_starting_balance) * 100.0;
+    if(daily_pnl_pct <= -g_config.daily_loss_pct)
     {
         PrintFormat("[DextradeEA] DAILY LOSS LIMIT (%.1f%%) — KILL SWITCH ACTIVE", daily_pnl_pct);
         g_kill_switch_active = true;
@@ -115,27 +172,32 @@ void OnTimer()
         return;
     }
 
-    // 3. Periodic heartbeat (every 60s)
+    // Heartbeat every 60s
     if(TimeCurrent() - g_last_heartbeat > 60)
     {
         SendHeartbeat(false);
         g_last_heartbeat = TimeCurrent();
     }
 
-    // 4. Already at max open? Skip poll.
-    if(CountOurPositions() >= MaxOpenPositions)
+    // Daily trade cap check
+    if(g_config.trades_remaining <= 0)
+    {
+        // Already hit cap, skip poll
+        return;
+    }
+
+    // Max open positions check
+    if(CountOurPositions() >= g_config.max_open_positions)
     {
         return;
     }
 
-    // 5. Poll for next signal
+    // Poll for next signal
     string body = HttpGet(ApiBaseUrl + "/api/ea/next-signal?ea=" + EaInstanceId);
     if(StringLen(body) < 5) return;
-
-    // No signal available
     if(StringFind(body, "\"signal\":null") >= 0) return;
 
-    // Parse signal fields (regex-style — MQL5 has no JSON parser built-in)
+    // Parse signal
     long   signal_id     = (long)JsonGetNumber(body, "id");
     string direction     = JsonGetString(body, "direction");
     double entry         = JsonGetNumber(body, "entry");
@@ -143,49 +205,45 @@ void OnTimer()
     double tp1           = JsonGetNumber(body, "tp1");
     double tp2           = JsonGetNumber(body, "tp2");
     int    confidence    = (int)JsonGetNumber(body, "confidence_pct");
-    string broker_symbol = JsonGetString(body, "broker_symbol");
 
     if(signal_id <= 0)
     {
-        Print("[DextradeEA] failed to parse signal_id from response: ", StringSubstr(body, 0, 200));
+        Print("[DextradeEA] failed to parse signal_id");
         return;
     }
 
-    PrintFormat("[DextradeEA] signal #%I64d %s @%.2f SL=%.2f TP1=%.2f conf=%d%%",
-                signal_id, direction, entry, sl, tp1, confidence);
+    PrintFormat("[DextradeEA] signal #%I64d %s @%.2f SL=%.2f TP1=%.2f conf=%d%% (today %d/%d)",
+                signal_id, direction, entry, sl, tp1, confidence,
+                g_config.trades_today, g_config.max_trades_per_day);
 
-    if(confidence < MinConfidencePct)
+    if(confidence < g_config.min_confidence_pct)
     {
-        PrintFormat("[DextradeEA] skip — conf %d%% < min %d%%", confidence, MinConfidencePct);
+        PrintFormat("[DextradeEA] skip — conf %d%% < min %d%%", confidence, g_config.min_confidence_pct);
         ReportRejected(signal_id, "confidence_below_threshold");
         return;
     }
 
     if(direction != "LONG" && direction != "SHORT")
     {
-        PrintFormat("[DextradeEA] skip — non-directional: %s", direction);
-        ReportRejected(signal_id, "non_directional_signal");
+        ReportRejected(signal_id, "non_directional");
         return;
     }
 
     if(entry <= 0 || sl <= 0)
     {
-        Print("[DextradeEA] skip — invalid levels");
         ReportRejected(signal_id, "invalid_levels");
         return;
     }
 
-    // 6. Compute lot size
     double lot = ComputeLotSize(entry, sl);
     if(lot <= 0)
     {
-        Print("[DextradeEA] skip — invalid lot size");
         ReportRejected(signal_id, "invalid_lot_size");
         return;
     }
 
-    // 7. Execute
-    if(EnablePaperMode || !EnableExecution)
+    // Paper mode
+    if(g_config.enable_paper || !g_config.enable_execution)
     {
         PrintFormat("[DextradeEA] PAPER %s %.2f @%.2f SL=%.2f TP1=%.2f (signal=%I64d)",
                     direction, lot, entry, sl, tp1, signal_id);
@@ -193,28 +251,22 @@ void OnTimer()
         return;
     }
 
-    // LIVE EXECUTION
+    // LIVE
     bool ok = false;
     double price_now = direction == "LONG" ? SymbolInfoDouble(_Symbol, SYMBOL_ASK)
                                            : SymbolInfoDouble(_Symbol, SYMBOL_BID);
 
     if(direction == "LONG")
-    {
-        ok = trade.Buy(lot, _Symbol, 0, sl, tp1,
-                       StringFormat("yeehee #%I64d", signal_id));
-    }
+        ok = trade.Buy(lot, _Symbol, 0, sl, tp1, StringFormat("yeehee #%I64d", signal_id));
     else
-    {
-        ok = trade.Sell(lot, _Symbol, 0, sl, tp1,
-                        StringFormat("yeehee #%I64d", signal_id));
-    }
+        ok = trade.Sell(lot, _Symbol, 0, sl, tp1, StringFormat("yeehee #%I64d", signal_id));
 
     if(!ok)
     {
         uint err = trade.ResultRetcode();
         string desc = trade.ResultRetcodeDescription();
-        PrintFormat("[DextradeEA] OrderSend FAILED signal=%I64d ret=%u (%s)", signal_id, err, desc);
-        ReportRejected(signal_id, StringFormat("broker_ret_%u_%s", err, desc));
+        PrintFormat("[DextradeEA] OrderSend FAILED ret=%u (%s)", err, desc);
+        ReportRejected(signal_id, StringFormat("broker_ret_%u", err));
         return;
     }
 
@@ -228,6 +280,95 @@ void OnTimer()
 }
 
 // ============================================================================
+// POSITION MANAGEMENT — break-even + trailing stop (called every tick)
+// ============================================================================
+void ManageOpenPositions()
+{
+    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+    if(point <= 0) return;
+
+    for(int i = PositionsTotal() - 1; i >= 0; i--)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if(!PositionSelectByTicket(ticket)) continue;
+        if(PositionGetInteger(POSITION_MAGIC) != (long)MagicNumber) continue;
+
+        long   type        = PositionGetInteger(POSITION_TYPE);   // 0=BUY, 1=SELL
+        double entry       = PositionGetDouble(POSITION_PRICE_OPEN);
+        double current_sl  = PositionGetDouble(POSITION_SL);
+        double current_tp  = PositionGetDouble(POSITION_TP);
+        double price_now   = (type == POSITION_TYPE_BUY)
+                             ? SymbolInfoDouble(_Symbol, SYMBOL_BID)
+                             : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+
+        double profit_pips = (type == POSITION_TYPE_BUY)
+                             ? (price_now - entry) / point
+                             : (entry - price_now) / point;
+        if(profit_pips <= 0) continue;  // no profit yet, no management
+
+        double new_sl = current_sl;
+
+        // 1. Break-even — move SL to entry + lock_pips when profit >= trigger
+        if(g_config.enable_break_even && profit_pips >= g_config.break_even_trigger_pips)
+        {
+            double bep_sl = (type == POSITION_TYPE_BUY)
+                            ? entry + g_config.break_even_lock_pips * point
+                            : entry - g_config.break_even_lock_pips * point;
+            // Only move SL forward (never backward — never increase risk)
+            if(type == POSITION_TYPE_BUY  && bep_sl > current_sl) new_sl = bep_sl;
+            if(type == POSITION_TYPE_SELL && (current_sl == 0 || bep_sl < current_sl)) new_sl = bep_sl;
+        }
+
+        // 2. Trailing stop — follow price by trailing_distance once trigger hit
+        if(g_config.enable_trailing && profit_pips >= g_config.trailing_trigger_pips)
+        {
+            double trail_sl = (type == POSITION_TYPE_BUY)
+                              ? price_now - g_config.trailing_distance_pips * point
+                              : price_now + g_config.trailing_distance_pips * point;
+            if(type == POSITION_TYPE_BUY  && trail_sl > new_sl) new_sl = trail_sl;
+            if(type == POSITION_TYPE_SELL && (new_sl == 0 || trail_sl < new_sl)) new_sl = trail_sl;
+        }
+
+        // Apply if changed
+        if(new_sl != current_sl && new_sl > 0)
+        {
+            int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+            new_sl = NormalizeDouble(new_sl, digits);
+            if(trade.PositionModify(ticket, new_sl, current_tp))
+            {
+                PrintFormat("[DextradeEA] SL moved ticket=%I64u %.2f -> %.2f (profit=%.0fpips)",
+                            ticket, current_sl, new_sl, profit_pips);
+            }
+        }
+    }
+}
+
+// ============================================================================
+// CONFIG POLLING
+// ============================================================================
+void PollConfig()
+{
+    string body = HttpGet(ApiBaseUrl + "/api/ea/config?ea=" + EaInstanceId);
+    if(StringLen(body) < 10) return;
+
+    g_config.enable_execution        = JsonGetBool(body, "enable_execution");
+    g_config.enable_paper            = JsonGetBool(body, "enable_paper");
+    g_config.max_open_positions      = (int)JsonGetNumber(body, "max_open_positions");
+    g_config.max_trades_per_day      = (int)JsonGetNumber(body, "max_trades_per_day");
+    g_config.trades_today            = (int)JsonGetNumber(body, "trades_today");
+    g_config.trades_remaining        = (int)JsonGetNumber(body, "trades_remaining");
+    g_config.daily_loss_pct          = JsonGetNumber(body, "daily_loss_pct");
+    g_config.min_confidence_pct      = (int)JsonGetNumber(body, "min_confidence_pct");
+    g_config.risk_per_trade_pct      = JsonGetNumber(body, "risk_per_trade_pct");
+    g_config.enable_break_even       = JsonGetBool(body, "enable_break_even");
+    g_config.break_even_trigger_pips = (int)JsonGetNumber(body, "break_even_trigger_pips");
+    g_config.break_even_lock_pips    = (int)JsonGetNumber(body, "break_even_lock_pips");
+    g_config.enable_trailing         = JsonGetBool(body, "enable_trailing");
+    g_config.trailing_trigger_pips   = (int)JsonGetNumber(body, "trailing_trigger_pips");
+    g_config.trailing_distance_pips  = (int)JsonGetNumber(body, "trailing_distance_pips");
+}
+
+// ============================================================================
 // HELPERS
 // ============================================================================
 
@@ -235,7 +376,7 @@ double ComputeLotSize(double entry, double sl)
 {
     if(sl <= 0 || entry <= 0) return 0;
     double balance     = AccountInfoDouble(ACCOUNT_BALANCE);
-    double risk_amount = balance * (RiskPercentPerTrade / 100.0);
+    double risk_amount = balance * (g_config.risk_per_trade_pct / 100.0);
     double sl_distance = MathAbs(entry - sl);
     if(sl_distance <= 0) return 0;
 
@@ -245,7 +386,6 @@ double ComputeLotSize(double entry, double sl)
     double pip_value   = tick_value / tick_size;
     double lot_raw     = risk_amount / (sl_distance * pip_value);
 
-    // Round to broker lot step
     double lot_step    = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
     double lot_min     = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
     double lot_max     = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
@@ -260,30 +400,19 @@ int CountOurPositions()
     {
         ulong ticket = PositionGetTicket(i);
         if(PositionSelectByTicket(ticket))
-        {
             if(PositionGetInteger(POSITION_MAGIC) == (long)MagicNumber) count++;
-        }
     }
     return count;
 }
 
 string HttpGet(string url)
 {
-    char post[];
-    char result[];
-    string headers = "";
-    string result_headers;
-    int timeout = 5000;
-
-    int res = WebRequest("GET", url, headers, timeout, post, result, result_headers);
+    char post[]; char result[]; string headers = ""; string result_headers;
+    int res = WebRequest("GET", url, headers, 5000, post, result, result_headers);
     if(res == -1)
     {
-        int err = GetLastError();
-        if(err == 4014)
-        {
-            // ERR_NOT_PERMITTED — URL not whitelisted in MT5 settings
-            PrintFormat("[DextradeEA] WebRequest blocked: add %s to Tools→Options→Expert Advisors→Allow URL", ApiBaseUrl);
-        }
+        if(GetLastError() == 4014)
+            PrintFormat("[DextradeEA] WebRequest blocked: add %s in Tools->Options->Expert Advisors", ApiBaseUrl);
         return "";
     }
     return CharArrayToString(result);
@@ -291,31 +420,19 @@ string HttpGet(string url)
 
 bool HttpPost(string url, string body)
 {
-    char post[];
-    StringToCharArray(body, post, 0, StringLen(body));
-    char result[];
-    string headers = "Content-Type: application/json\r\n";
-    string result_headers;
-    int timeout = 5000;
-    int res = WebRequest("POST", url, headers, timeout, post, result, result_headers);
-    if(res == -1)
-    {
-        PrintFormat("[DextradeEA] HttpPost FAILED url=%s err=%d", url, GetLastError());
-        return false;
-    }
-    return res == 200;
+    char post[]; StringToCharArray(body, post, 0, StringLen(body));
+    char result[]; string headers = "Content-Type: application/json\r\n"; string result_headers;
+    int res = WebRequest("POST", url, headers, 5000, post, result, result_headers);
+    return res != -1;
 }
 
 void SendHeartbeat(bool is_paused)
 {
     string body = StringFormat(
         "{\"ea_instance_id\":\"%s\",\"account_login\":%I64d,\"account_balance\":%.2f,\"account_equity\":%.2f,\"open_positions\":%d,\"is_paused\":%s}",
-        EaInstanceId,
-        AccountInfoInteger(ACCOUNT_LOGIN),
-        AccountInfoDouble(ACCOUNT_BALANCE),
-        AccountInfoDouble(ACCOUNT_EQUITY),
-        CountOurPositions(),
-        is_paused ? "true" : "false"
+        EaInstanceId, AccountInfoInteger(ACCOUNT_LOGIN),
+        AccountInfoDouble(ACCOUNT_BALANCE), AccountInfoDouble(ACCOUNT_EQUITY),
+        CountOurPositions(), is_paused ? "true" : "false"
     );
     HttpPost(ApiBaseUrl + "/api/ea/heartbeat", body);
 }
@@ -326,7 +443,7 @@ void ReportPaperExecuted(long signal_id, string direction, double lot, double en
         "{\"signal_id\":%I64d,\"ea_instance_id\":\"%s\",\"mt5_account_login\":%I64d,\"status\":\"OPEN\",\"execution_price\":%.2f,\"execution_lot\":%.2f,\"execution_sl\":%.2f,\"execution_tp\":%.2f,\"slippage_points\":0,\"account_balance_at_open\":%.2f,\"risk_pct_used\":%.2f,\"rejected_reason\":\"paper_mode\"}",
         signal_id, EaInstanceId, AccountInfoInteger(ACCOUNT_LOGIN),
         entry, lot, sl, tp,
-        AccountInfoDouble(ACCOUNT_BALANCE), RiskPercentPerTrade
+        AccountInfoDouble(ACCOUNT_BALANCE), g_config.risk_per_trade_pct
     );
     HttpPost(ApiBaseUrl + "/api/ea/report", body);
 }
@@ -337,7 +454,7 @@ void ReportLiveOpened(long signal_id, ulong ticket, double fill, double lot, dou
         "{\"signal_id\":%I64d,\"ea_instance_id\":\"%s\",\"mt5_ticket_id\":%I64u,\"mt5_account_login\":%I64d,\"status\":\"OPEN\",\"execution_price\":%.2f,\"execution_lot\":%.2f,\"execution_sl\":%.2f,\"execution_tp\":%.2f,\"slippage_points\":%d,\"account_balance_at_open\":%.2f,\"risk_pct_used\":%.2f}",
         signal_id, EaInstanceId, ticket, AccountInfoInteger(ACCOUNT_LOGIN),
         fill, lot, sl, tp, slip,
-        AccountInfoDouble(ACCOUNT_BALANCE), RiskPercentPerTrade
+        AccountInfoDouble(ACCOUNT_BALANCE), g_config.risk_per_trade_pct
     );
     HttpPost(ApiBaseUrl + "/api/ea/report", body);
 }
@@ -352,8 +469,7 @@ void ReportRejected(long signal_id, string reason)
 }
 
 // ============================================================================
-// JSON helpers — minimal regex-style parsers (MQL5 has no JSON lib)
-// Only handles top-level scalar fields. Sufficient for our schema.
+// JSON parsers (regex-style — MQL5 has no JSON lib)
 // ============================================================================
 
 string JsonGetString(string json, string key)
@@ -369,14 +485,11 @@ string JsonGetString(string json, string key)
 
 double JsonGetNumber(string json, string key)
 {
-    // Try numeric (no quotes)
     string needle = "\"" + key + "\":";
     int pos = StringFind(json, needle);
     if(pos < 0) return 0;
     int start = pos + StringLen(needle);
-    // Skip optional whitespace
     while(start < StringLen(json) && (StringGetCharacter(json, start) == ' ' || StringGetCharacter(json, start) == '\t')) start++;
-    // Find end of number (comma, brace, or whitespace)
     int end = start;
     while(end < StringLen(json))
     {
@@ -387,5 +500,15 @@ double JsonGetNumber(string json, string key)
     string num_str = StringSubstr(json, start, end - start);
     StringReplace(num_str, "\"", "");
     return StringToDouble(num_str);
+}
+
+bool JsonGetBool(string json, string key)
+{
+    string needle = "\"" + key + "\":";
+    int pos = StringFind(json, needle);
+    if(pos < 0) return false;
+    int start = pos + StringLen(needle);
+    while(start < StringLen(json) && (StringGetCharacter(json, start) == ' ' || StringGetCharacter(json, start) == '\t')) start++;
+    return StringSubstr(json, start, 4) == "true";
 }
 //+------------------------------------------------------------------+

@@ -26,6 +26,20 @@ export type AppSettings = {
   telegram_bot_token?: string | null
   telegram_chat_id?: string | null
   enable_telegram_push?: boolean
+  // EA execution config (migrations 010 + 011)
+  ea_enable_execution?: boolean
+  ea_enable_paper?: boolean
+  ea_max_open_positions?: number
+  ea_max_trades_per_day?: number
+  ea_daily_loss_pct?: number
+  ea_min_confidence_pct?: number
+  ea_risk_per_trade_pct?: number
+  ea_enable_break_even?: boolean
+  ea_break_even_trigger_pips?: number
+  ea_break_even_lock_pips?: number
+  ea_enable_trailing?: boolean
+  ea_trailing_trigger_pips?: number
+  ea_trailing_distance_pips?: number
 }
 
 export type ProviderKey = {

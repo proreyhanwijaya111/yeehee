@@ -277,10 +277,12 @@ def heartbeat(payload: HeartbeatPayload):
 
 @app.get("/api/ea/config")
 def get_ea_config(ea: str = Query(..., description="EA instance ID")):
-    """Returns safety config for EA (read from app_settings).
+    """Returns safety + execution config for EA (read from app_settings).
 
-    EA can use this to dynamically toggle paper mode, enable execution, etc.
-    without restarting EA.
+    EA polls this every cycle → no EA restart needed when user changes
+    settings via /more/settings/execution UI page.
+
+    Includes BEP + trailing + daily cap (migration 011).
     """
     supa = _get_supabase()
     if not supa:
@@ -288,21 +290,54 @@ def get_ea_config(ea: str = Query(..., description="EA instance ID")):
     try:
         r = (
             supa.from_("app_settings")
-            .select("ea_enable_execution, ea_enable_paper, ea_max_open_positions, ea_daily_loss_pct, ea_min_confidence_pct")
+            .select(
+                "ea_enable_execution, ea_enable_paper, ea_max_open_positions, "
+                "ea_daily_loss_pct, ea_min_confidence_pct, "
+                "ea_max_trades_per_day, ea_risk_per_trade_pct, "
+                "ea_enable_break_even, ea_break_even_trigger_pips, ea_break_even_lock_pips, "
+                "ea_enable_trailing, ea_trailing_trigger_pips, ea_trailing_distance_pips"
+            )
             .eq("user_id", "default")
             .limit(1)
             .execute()
         )
         rows = r.data or []
         row = rows[0] if rows else {}
+
+        # Count today's trades for this EA's account (for cap enforcement)
+        trades_today = 0
+        try:
+            tr = supa.from_("rcs_executions_today").select("trades_today").limit(1).execute()
+            if tr.data:
+                trades_today = int(tr.data[0].get("trades_today") or 0)
+        except Exception:
+            pass  # view may not exist yet
+
+        max_trades_per_day = int(row.get("ea_max_trades_per_day") or 5)
+
         return {
             "ea_instance_id":      ea,
+            # Safety flags
             "enable_execution":    bool(row.get("ea_enable_execution") or False),
             "enable_paper":        bool(row.get("ea_enable_paper") or True),
+            # Limits
             "max_open_positions":  int(row.get("ea_max_open_positions") or 1),
+            "max_trades_per_day":  max_trades_per_day,
+            "trades_today":        trades_today,
+            "trades_remaining":    max(0, max_trades_per_day - trades_today),
             "daily_loss_pct":      float(row.get("ea_daily_loss_pct") or 5.0),
             "min_confidence_pct":  int(row.get("ea_min_confidence_pct") or 65),
-            "received_at":         datetime.now(timezone.utc).isoformat(),
+            # Risk per trade
+            "risk_per_trade_pct":  float(row.get("ea_risk_per_trade_pct") or 1.0),
+            # Break-even
+            "enable_break_even":         bool(row.get("ea_enable_break_even", True)),
+            "break_even_trigger_pips":   int(row.get("ea_break_even_trigger_pips") or 50),
+            "break_even_lock_pips":      int(row.get("ea_break_even_lock_pips") or 5),
+            # Trailing stop
+            "enable_trailing":           bool(row.get("ea_enable_trailing", True)),
+            "trailing_trigger_pips":     int(row.get("ea_trailing_trigger_pips") or 100),
+            "trailing_distance_pips":    int(row.get("ea_trailing_distance_pips") or 30),
+            "received_at":               datetime.now(timezone.utc).isoformat(),
         }
     except Exception as e:
         # Migration may not be applied — return safe defaults
@@ -311,8 +346,18 @@ def get_ea_config(ea: str = Query(..., description="EA instance ID")):
             "enable_execution":    False,
             "enable_paper":        True,
             "max_open_positions":  1,
+            "max_trades_per_day":  5,
+            "trades_today":        0,
+            "trades_remaining":    5,
             "daily_loss_pct":      5.0,
             "min_confidence_pct":  65,
+            "risk_per_trade_pct":  1.0,
+            "enable_break_even":         True,
+            "break_even_trigger_pips":   50,
+            "break_even_lock_pips":      5,
+            "enable_trailing":           True,
+            "trailing_trigger_pips":     100,
+            "trailing_distance_pips":    30,
             "received_at":         datetime.now(timezone.utc).isoformat(),
             "_warning":            f"using defaults: {str(e)[:80]}",
         }
