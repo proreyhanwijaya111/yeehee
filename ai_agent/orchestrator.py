@@ -138,17 +138,26 @@ class SettingsStore:
     def push_heartbeat(self, user_id: str = "default", **fields) -> None:
         if not self._client:
             return
-        # Opsi B: trigger_reason field requires migration 005. Retry without if missing.
+        # Migration safety: trigger_reason (005) + worker_id (006) might not be
+        # applied yet. On column-missing error, pop the new field and retry.
         payload = {"user_id": user_id, "updated_at": datetime.now(timezone.utc).isoformat(), **fields}
-        try:
-            self._client.from_("daemon_heartbeat").upsert(payload, on_conflict="user_id").execute()
-        except Exception as e:
-            if "trigger_reason" in str(e).lower() or "column" in str(e).lower():
-                payload.pop("trigger_reason", None)
-                try:
-                    self._client.from_("daemon_heartbeat").upsert(payload, on_conflict="user_id").execute()
-                except Exception:
-                    pass
+        optional_cols = ("trigger_reason", "worker_id")
+
+        def _try_upsert(p: dict) -> bool:
+            try:
+                self._client.from_("daemon_heartbeat").upsert(p, on_conflict="user_id").execute()
+                return True
+            except Exception as exc:
+                msg = str(exc).lower()
+                # Detect column-missing errors and progressively drop optional fields
+                for col in optional_cols:
+                    if col in msg and col in p:
+                        p.pop(col, None)
+                        return _try_upsert(p)
+                # If error is about a different column, give up silently (heartbeat is non-critical)
+                return False
+
+        _try_upsert(payload)
 
     # ── Push signal bundle ──
 

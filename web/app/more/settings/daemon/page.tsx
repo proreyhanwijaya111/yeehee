@@ -1,7 +1,7 @@
 'use client'
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { ArrowLeft, Copy, Check, Terminal, Download, Loader2, Server, Eye, EyeOff } from 'lucide-react'
+import { ArrowLeft, Copy, Check, Terminal, Download, Loader2, Server, Eye, EyeOff, Key } from 'lucide-react'
 import {
   getAppSettings, getDaemonHeartbeat, isDaemonOnline,
   type AppSettings, type DaemonHeartbeat,
@@ -11,15 +11,38 @@ const REPO_URL = 'https://github.com/proreyhanwijaya111/yeehee.git'
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || ''
 const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
 
+// LocalStorage keys for persisting input across page loads (browser only)
+const LS_OPENROUTER = 'yeehee:install:openrouter'
+const LS_TWELVE     = 'yeehee:install:twelve'
+const LS_SVCKEY     = 'yeehee:install:svckey'
+
 export default function DaemonPage() {
   const [s, setS] = useState<AppSettings | null>(null)
   const [hb, setHb] = useState<DaemonHeartbeat | null>(null)
   const [activeTab, setActiveTab] = useState<'install' | 'update' | 'service'>('install')
   const [showSecrets, setShowSecrets] = useState(false)
 
+  // Optional extra keys (multi-PC ready). Persisted to localStorage so user
+  // doesn't have to retype every time. Empty string = "skip / use existing".
+  const [openRouterKey, setOpenRouterKey] = useState('')
+  const [twelveKey,     setTwelveKey]     = useState('')
+  const [svcKey,        setSvcKey]        = useState('')
+
   useEffect(() => {
     Promise.all([getAppSettings(), getDaemonHeartbeat()]).then(([a, h]) => { setS(a); setHb(h) })
+    if (typeof window !== 'undefined') {
+      setOpenRouterKey(localStorage.getItem(LS_OPENROUTER) || '')
+      setTwelveKey(localStorage.getItem(LS_TWELVE) || '')
+      setSvcKey(localStorage.getItem(LS_SVCKEY) || '')
+    }
   }, [])
+
+  // Persist to localStorage on change (debounced via setTimeout in handler)
+  const persistKey = (lsKey: string, value: string) => {
+    if (typeof window === 'undefined') return
+    if (value) localStorage.setItem(lsKey, value)
+    else localStorage.removeItem(lsKey)
+  }
 
   const online = isDaemonOnline(hb)
 
@@ -32,14 +55,12 @@ export default function DaemonPage() {
   // Copy ALWAYS uses the real key — masking only affects what's rendered on screen.
   // (Previous bug: masking applied to copy too, so users pasted bullet chars and
   //  got Supabase HTTP 401 auth fail.)
-  const installScriptCopy    = buildInstallScript(SUPABASE_URL, SUPABASE_KEY, true)
-  const installScriptDisplay = buildInstallScript(SUPABASE_URL, SUPABASE_KEY, showSecrets)
+  const extras = { openRouterKey, twelveKey, svcKey }
+  const installScriptCopy    = buildInstallScript(SUPABASE_URL, SUPABASE_KEY, extras, true)
+  const installScriptDisplay = buildInstallScript(SUPABASE_URL, SUPABASE_KEY, extras, showSecrets)
   const updateScript  = buildUpdateScript()
-  const serviceScriptCopy    = buildServiceScript(SUPABASE_URL, SUPABASE_KEY)
-  const serviceScriptDisplay = buildServiceScript(
-    SUPABASE_URL,
-    showSecrets ? SUPABASE_KEY : (SUPABASE_KEY ? SUPABASE_KEY.slice(0, 20) + '••••••••' : SUPABASE_KEY),
-  )
+  const serviceScriptCopy    = buildServiceScript(SUPABASE_URL, SUPABASE_KEY, extras)
+  const serviceScriptDisplay = buildServiceScript(SUPABASE_URL, SUPABASE_KEY, extras, showSecrets)
 
   return (
     <main className="max-w-lg mx-auto px-4 pt-4 pb-2 animate-fade-in">
@@ -121,8 +142,38 @@ export default function DaemonPage() {
       {activeTab === 'install' && (
         <>
           <Section
+            title="Optional API keys (multi-PC support)"
+            sub="Isi key di sini biar generated install one-liner langsung embed semua kredensial. Disimpan di localStorage browser lo (tidak ke server). Kosong = installer skip key tersebut, daemon fall back ke mode minimum."
+          >
+            <KeyInput
+              label="OpenRouter API key"
+              placeholder="sk-or-v1-..."
+              value={openRouterKey}
+              onChange={(v) => { setOpenRouterKey(v); persistKey(LS_OPENROUTER, v) }}
+              hint="Tanpa ini: daemon fall back ke rule_engine 4-agent. Gratis di openrouter.ai/keys (200 req/day)."
+              showSecrets={showSecrets}
+            />
+            <KeyInput
+              label="Twelve Data API key"
+              placeholder="33e7..."
+              value={twelveKey}
+              onChange={(v) => { setTwelveKey(v); persistKey(LS_TWELVE, v) }}
+              hint="Tanpa ini: XAU spot pakai yfinance (15min delay). Gratis di twelvedata.com (800 req/day)."
+              showSecrets={showSecrets}
+            />
+            <KeyInput
+              label="Supabase service-role key (optional)"
+              placeholder="eyJh..."
+              value={svcKey}
+              onChange={(v) => { setSvcKey(v); persistKey(LS_SVCKEY, v) }}
+              hint="Optional, untuk RLS bypass. Anon key cukup untuk dev. Service key dari Supabase dashboard → Settings → API → service_role secret."
+              showSecrets={showSecrets}
+            />
+          </Section>
+
+          <Section
             title="One-liner Install"
-            sub="Buka PowerShell biasa (BUKAN CMD), paste 1 baris ini, Enter sekali. Auto: install Python+Git kalau belum ada, clone repo, setup venv, install deps, write config, run daemon."
+            sub="Buka PowerShell biasa (BUKAN CMD), paste 1 baris ini, Enter sekali. Auto: install Python+Git kalau belum ada, clone repo, setup venv, install deps, write config, run daemon. Jalan di PC manapun."
           >
             <div className="flex items-center gap-2 mb-2">
               <button
@@ -135,6 +186,12 @@ export default function DaemonPage() {
               <p className="text-[10px] text-emerald-400">✓ Copy selalu pake key asli</p>
             </div>
             <CodeBlock displayCode={installScriptDisplay} copyCode={installScriptCopy} multiline />
+            <div className="mt-2 flex items-center gap-1.5 text-[10px] text-slate-500">
+              <Key size={10} />
+              <span>
+                Worker ID auto-generate per install (UUID). Kalau lo install di 2 PC, masing-masing jadi worker beda.
+              </span>
+            </div>
           </Section>
 
           <Section
@@ -203,17 +260,47 @@ export default function DaemonPage() {
 
 // ─── Script Builders ─────────────────────────────────────────────────────────
 
-function buildInstallScript(supaUrl: string, supaKey: string, show: boolean): string {
-  const url = supaUrl || 'YOUR_SUPABASE_URL'
-  const key = show
-    ? (supaKey || 'YOUR_SUPABASE_ANON_KEY')
-    : (supaKey ? supaKey.slice(0, 20) + '••••••••' : 'YOUR_SUPABASE_ANON_KEY')
+interface ExtraKeys {
+  openRouterKey: string
+  twelveKey: string
+  svcKey: string
+}
+
+/** Mask a key for display: first 5 + bullets + last 4 (or all bullets if too short) */
+function maskKey(k: string): string {
+  if (!k) return ''
+  if (k.length <= 12) return '••••••••'
+  return k.slice(0, 5) + '••••••••' + k.slice(-4)
+}
+
+/** Build optional `-Param 'value'` segment, or empty string if value missing */
+function optParam(name: string, value: string, show: boolean): string {
+  if (!value) return ''
+  const v = show ? value : maskKey(value)
+  return ` -${name} '${v}'`
+}
+
+function buildInstallScript(
+  supaUrl: string,
+  supaAnon: string,
+  extras: ExtraKeys,
+  show: boolean,
+): string {
+  const url     = supaUrl  || 'YOUR_SUPABASE_URL'
+  const anon    = show ? (supaAnon || 'YOUR_SUPABASE_ANON_KEY') : maskKey(supaAnon) || 'YOUR_SUPABASE_ANON_KEY'
+
+  // Optional segments (only added when key has value)
+  const orSeg     = optParam('OpenRouterKey',      extras.openRouterKey, show)
+  const tdSeg     = optParam('TwelveDataKey',      extras.twelveKey,     show)
+  const svcSeg    = optParam('SupabaseServiceKey', extras.svcKey,        show)
+
   // Single-line bootstrap — pattern same as Clinix Mira worker.
   // Script body served from /api/setup/script (always latest, no clipboard fragility).
   return (
     `Set-ExecutionPolicy -Scope Process Bypass -Force; ` +
     `iwr https://yeehee.vercel.app/api/setup/script -OutFile $env:TEMP\\yeehee-setup.ps1; ` +
-    `& $env:TEMP\\yeehee-setup.ps1 -SupabaseUrl '${url}' -SupabaseAnonKey '${key}'`
+    `& $env:TEMP\\yeehee-setup.ps1 -SupabaseUrl '${url}' -SupabaseAnonKey '${anon}'` +
+    `${svcSeg}${orSeg}${tdSeg}`
   )
 }
 
@@ -234,14 +321,23 @@ function buildUpdateScript(): string {
   ].join('\n')
 }
 
-function buildServiceScript(supaUrl: string, supaKey: string): string {
-  const url = supaUrl || 'YOUR_SUPABASE_URL'
-  const key = supaKey || 'YOUR_SUPABASE_ANON_KEY'
+function buildServiceScript(
+  supaUrl: string,
+  supaAnon: string,
+  extras: ExtraKeys,
+  show: boolean = true,
+): string {
+  const url     = supaUrl  || 'YOUR_SUPABASE_URL'
+  const anon    = show ? (supaAnon || 'YOUR_SUPABASE_ANON_KEY') : maskKey(supaAnon) || 'YOUR_SUPABASE_ANON_KEY'
+  const orSeg   = optParam('OpenRouterKey',      extras.openRouterKey, show)
+  const tdSeg   = optParam('TwelveDataKey',      extras.twelveKey,     show)
+  const svcSeg  = optParam('SupabaseServiceKey', extras.svcKey,        show)
   return (
     `# Install sebagai Windows Service (auto-start saat boot). Run as Administrator.\n` +
     `Set-ExecutionPolicy -Scope Process Bypass -Force; ` +
     `iwr https://yeehee.vercel.app/api/setup/script -OutFile $env:TEMP\\yeehee-setup.ps1; ` +
-    `& $env:TEMP\\yeehee-setup.ps1 -SupabaseUrl '${url}' -SupabaseAnonKey '${key}' -InstallServiceOnly`
+    `& $env:TEMP\\yeehee-setup.ps1 -SupabaseUrl '${url}' -SupabaseAnonKey '${anon}'` +
+    `${svcSeg}${orSeg}${tdSeg} -InstallServiceOnly`
   )
 }
 
@@ -258,6 +354,35 @@ function Section({ title, sub, children }: {
         {children}
       </div>
     </section>
+  )
+}
+
+function KeyInput({ label, placeholder, value, onChange, hint, showSecrets }: {
+  label: string
+  placeholder: string
+  value: string
+  onChange: (v: string) => void
+  hint?: string
+  showSecrets: boolean
+}) {
+  return (
+    <div className="space-y-1">
+      <label className="text-[11px] font-semibold text-slate-300 flex items-center gap-1.5">
+        <Key size={11} className="text-slate-500" />
+        {label}
+        {value && <span className="text-emerald-400 text-[10px]">✓ tersimpan</span>}
+      </label>
+      <input
+        type={showSecrets ? 'text' : 'password'}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-[11px] text-slate-100 font-mono placeholder:text-slate-700 focus:outline-none focus:border-sky-700"
+        autoComplete="off"
+        spellCheck={false}
+      />
+      {hint && <p className="text-[10px] text-slate-500 leading-tight">{hint}</p>}
+    </div>
   )
 }
 
