@@ -3,8 +3,8 @@ import './globals.css'
 import BottomNav from '@/components/BottomNav'
 
 export const metadata: Metadata = {
-  title:       'yeehee · Signal Emas',
-  description: 'Platform sinyal XAU/USD (emas) berbasis 4 AI agent. Analisis institutional-grade.',
+  title:       'yeehee · Signal Emas XAU/USD',
+  description: 'Platform sinyal XAU/USD (emas) berbasis 12-agent LLM tier pipeline. Server-rendered, mobile-first, real-time refresh.',
   manifest:    '/manifest.json',
   appleWebApp: {
     capable:           true,
@@ -17,7 +17,7 @@ export const metadata: Metadata = {
   },
   openGraph: {
     title:       'yeehee · Signal Emas XAU/USD',
-    description: 'Platform sinyal XAU/USD berbasis 4 AI agent',
+    description: 'Platform sinyal XAU/USD berbasis 12 AI agent tier pipeline.',
     type:        'website',
   },
 }
