@@ -1,7 +1,7 @@
 import Link from 'next/link'
 import {
-  Settings, Server, Brain, Cpu, Send, FlaskConical, BookOpen, Newspaper, Briefcase,
-  ChevronRight, Github, ExternalLink,
+  Settings, Server, Brain, Cpu, Send, FlaskConical, BookOpen, Newspaper,
+  Calculator, ChevronRight, Github, ExternalLink,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -21,16 +21,16 @@ type Section = {
 
 const SECTIONS: Section[] = [
   {
-    title: 'Tracking',
+    title: 'Tools',
     items: [
-      { href: '/portfolio',      icon: Briefcase,    label: 'Portfolio',          desc: 'Active trades + history + win rate real' },
+      { href: '/calculator',     icon: Calculator,   label: 'Kalkulator posisi',  desc: 'Hitung lot size dari profile risk + level signal' },
+      { href: '/more/backtest',  icon: FlaskConical, label: 'Test strategi',      desc: 'Backtest historis XAU + Monte Carlo' },
     ],
   },
   {
     title: 'Konten',
     items: [
       { href: '/news',           icon: Newspaper,    label: 'Berita ekonomi',     desc: 'Kalender event high-impact USD & XAU' },
-      { href: '/more/backtest',  icon: FlaskConical, label: 'Test strategi',      desc: 'Backtest historis + Monte Carlo simulasi' },
       { href: '/more/glossary',  icon: BookOpen,     label: 'Glosarium',          desc: '46 istilah trading dalam Bahasa Indonesia' },
     ],
   },

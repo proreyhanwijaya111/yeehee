@@ -1,15 +1,17 @@
 'use client'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { Home, TrendingUp, Calculator, Brain, MoreHorizontal } from 'lucide-react'
+import { Home, TrendingUp, Briefcase, Brain, MoreHorizontal } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
+// 5-item bottom nav. Portfolio promoted (was in /more) — main user value
+// is real positions + win rate. Kalkulator moved to /more (tool, not core).
 const NAV = [
-  { href: '/',            label: 'Beranda',    icon: Home },
-  { href: '/signals',     label: 'Sinyal',     icon: TrendingUp },
-  { href: '/calculator',  label: 'Kalkulator', icon: Calculator },
-  { href: '/analysis',    label: 'Analisis',   icon: Brain },
-  { href: '/more',        label: 'Lainnya',    icon: MoreHorizontal },
+  { href: '/',            label: 'Beranda',   icon: Home },
+  { href: '/signals',     label: 'Sinyal',    icon: TrendingUp },
+  { href: '/portfolio',   label: 'Portfolio', icon: Briefcase },
+  { href: '/analysis',    label: 'Analisis',  icon: Brain },
+  { href: '/more',        label: 'Lainnya',   icon: MoreHorizontal },
 ]
 
 export default function BottomNav() {

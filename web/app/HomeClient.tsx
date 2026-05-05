@@ -7,16 +7,22 @@ import MacroSnapshot from '@/components/MacroSnapshot'
 import NewsAlert from '@/components/NewsAlert'
 import SignalCard from '@/components/SignalCard'
 import LiveTicker from '@/components/LiveTicker'
+import PortfolioGlance from '@/components/PortfolioGlance'
 import { ErrorState } from '@/components/LoadingSpinner'
 import { clearApiCache } from '@/lib/api'
 import type { SignalBundle } from '@/lib/types'
+import type { ActiveTrade, PortfolioStats } from '@/lib/server-api'
 
 interface Props {
-  initialBundle: SignalBundle | null
-  serverError?: string | null
+  initialBundle:    SignalBundle | null
+  serverError?:     string | null
+  openTrades?:      ActiveTrade[]
+  portfolioStats?:  PortfolioStats | null
 }
 
-export default function HomeClient({ initialBundle, serverError }: Props) {
+export default function HomeClient({
+  initialBundle, serverError, openTrades = [], portfolioStats = null,
+}: Props) {
   // SWR with fallbackData = no loading flash. Hydrates from server-rendered HTML,
   // then refreshes in background every 5 min. revalidateOnFocus disabled to
   // avoid hammering Supabase saat tab switch.
@@ -80,6 +86,9 @@ export default function HomeClient({ initialBundle, serverError }: Props) {
       <div className="space-y-4">
         {/* Live spot price ticker — independent dari daemon refresh */}
         <LiveTicker />
+
+        {/* Portfolio glance — production-grade quick access to /portfolio */}
+        <PortfolioGlance stats={portfolioStats} openTrades={openTrades} />
 
         {data.in_news_blackout && <NewsAlert type="blackout" event={data.blackout_event} />}
         {!data.in_news_blackout && data.upcoming_events?.[0] && (

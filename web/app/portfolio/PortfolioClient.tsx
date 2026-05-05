@@ -191,29 +191,41 @@ function StatsCard({ stats }: { stats: PortfolioStats }) {
   const closed = stats.closed_count
   const winrate = stats.win_rate * 100
   const totalR = stats.total_pnl_r
+  const reliability =
+    closed >= 30 ? { label: 'reliable', color: 'text-emerald-400' } :
+    closed >= 10 ? { label: 'developing', color: 'text-amber-400' } :
+                   { label: 'too few',     color: 'text-rose-400' }
+
   return (
-    <div className="space-y-1.5">
-      <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-widest mb-1.5 px-2">
-        Performance (real outcome)
-      </p>
-      <div className="bg-slate-800/40 rounded-2xl border border-slate-800 overflow-hidden">
-        <div className="grid grid-cols-2 gap-px bg-slate-800/60">
-          <Cell label="Win rate" value={`${winrate.toFixed(1)}%`}
-            tone={winrate >= 60 ? 'ok' : winrate >= 40 ? 'neutral' : 'bad'}
-            sub={`${stats.wins}W / ${stats.losses}L${stats.expired > 0 ? ` / ${stats.expired}E` : ''}`}
-          />
-          <Cell label="Total R" value={`${totalR >= 0 ? '+' : ''}${totalR.toFixed(2)} R`}
-            tone={totalR > 0 ? 'ok' : 'bad'}
-            sub={`avg ${stats.avg_pnl_r >= 0 ? '+' : ''}${stats.avg_pnl_r.toFixed(2)} R/trade`}
-          />
-          <Cell label="Avg win" value={`+${stats.avg_win_r.toFixed(2)} R`}
-            tone="ok" sub={`${stats.wins} wins`} />
-          <Cell label="Avg loss" value={`${stats.avg_loss_r.toFixed(2)} R`}
-            tone="bad" sub={`${stats.losses} losses`} />
+    <div>
+      <div className="flex items-center justify-between mb-1.5 px-2">
+        <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-widest">
+          Performance (real outcome)
+        </p>
+        <p className="text-[10px] text-slate-500">
+          <span className="font-mono">{closed}</span> trade · <span className={reliability.color}>{reliability.label}</span>
+        </p>
+      </div>
+      <div className="bg-gradient-to-br from-slate-800/60 to-slate-900/60 rounded-2xl border border-slate-800 overflow-hidden">
+        {/* Hero KPI: total return — biggest, dominant */}
+        <div className="px-4 py-4 border-b border-slate-800/80">
+          <p className="text-[10px] text-slate-500 uppercase tracking-wide font-semibold">Total return</p>
+          <p className={cn(
+            'text-3xl font-black tabular-nums leading-none mt-1',
+            totalR > 0 ? 'text-emerald-300' : totalR < 0 ? 'text-rose-300' : 'text-slate-400',
+          )}>
+            {totalR >= 0 ? '+' : ''}{totalR.toFixed(2)} R
+          </p>
+          <p className="text-[11px] text-slate-500 mt-1">
+            avg {stats.avg_pnl_r >= 0 ? '+' : ''}{stats.avg_pnl_r.toFixed(2)} R/trade · win rate {winrate.toFixed(1)}%
+          </p>
         </div>
-        <div className="px-3.5 py-2.5 border-t border-slate-800/80 text-[10px] text-slate-500 leading-relaxed">
-          Stats compute dari <span className="font-mono text-slate-300">{closed}</span> trade tertutup.
-          Lebih banyak trade = stat lebih reliable. Min 30 trade untuk valid signal-of-edge.
+        {/* Sub stats grid */}
+        <div className="grid grid-cols-3 gap-px bg-slate-800/60">
+          <Cell label="Wins"  value={`${stats.wins}`}   tone="ok"   sub={`avg +${stats.avg_win_r.toFixed(2)} R`} />
+          <Cell label="Losses" value={`${stats.losses}`} tone="bad" sub={`avg ${stats.avg_loss_r.toFixed(2)} R`} />
+          <Cell label="Open"   value={`${stats.open_count}`} tone="neutral"
+                sub={stats.expired > 0 ? `${stats.expired} expired` : 'tracking'} />
         </div>
       </div>
     </div>
