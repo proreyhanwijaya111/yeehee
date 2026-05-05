@@ -24,7 +24,10 @@
 // ============================================================================
 // USER INPUTS (initial values — overridden by API config every poll)
 // ============================================================================
-input string  ApiBaseUrl          = "http://localhost:8001";
+// Note: MT5 WebRequest whitelist requires URL with valid TLD (.com/.me/etc).
+// localtest.me is a PUBLIC DNS that always resolves to 127.0.0.1, so requests
+// hit local FastAPI on port 8001. Whitelist URL di MT5: http://localtest.me:8001
+input string  ApiBaseUrl          = "http://localtest.me:8001";
 input string  EaInstanceId        = "ea-mt5-pcrumah-1";
 input int     PollIntervalSec     = 30;
 input ulong   MagicNumber         = 20260505;
