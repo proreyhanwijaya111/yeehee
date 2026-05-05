@@ -9,6 +9,28 @@ all items are **non-urgent**. None blocks current functionality.
 
 - [x] Twelve Data real-time spot price integration (daemon-side)
 - [x] TradingView XAU/USD live widget di home page (UI-side)
+- [x] Verified MC math correctness (analytical = actual, expectancy 0.375)
+- [x] Historical backtest API + UI (real XAU OHLCV + rule-engine + equity curve)
+
+## Pending (waiting on user action)
+
+- [ ] **Set TWELVE_DATA_API_KEY in Vercel env vars** (so /api/backtest-historical
+      works without per-request key). User key: `33e77a449b184ce897f4aa2d1c7c03fb`
+      (paste this with `vercel env add TWELVE_DATA_API_KEY production`).
+      User said: "boleh tapi jangan dikerjain dulu buat list aja" — execute when
+      user explicitly says go.
+
+- [ ] **Set TWELVE_DATA_API_KEY in PC daemon .env** (so daemon uses real-time
+      spot via fetch_realtime_xau_spot, not yfinance fallback). Same key as above.
+      User reminder: "step 2 saya bingung ingetin saya nanti".
+
+- [ ] **Verify Historis backtest end-to-end** after API key set:
+      1. Buka /more/backtest, klik tab "Historis"
+      2. Settings: 1h timeframe, 90d lookback, 10000 modal, 1% risk, 10K MC runs
+      3. Click "Jalankan backtest historis"
+      4. Verify: trades count > 0, equity curve renders, MC stats populate
+      5. Compare expected output: ~50-150 trades over 90d, win rate 35-55%
+         depending on volatility, expectancy positive if rule-engine works
 
 ## Deferred — UI/UX polish
 
