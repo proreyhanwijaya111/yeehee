@@ -1,6 +1,6 @@
 'use client'
 import { useState } from 'react'
-import { ChevronDown, ChevronUp } from 'lucide-react'
+import { ChevronDown, ChevronUp, Hourglass } from 'lucide-react'
 import type { Signal, TradingStyle } from '@/lib/types'
 import {
   ACTION_LABEL, STYLE_LABEL, cn, fmtPrice, fmtPct, fmtR, explainFlat,
@@ -11,6 +11,19 @@ interface Props {
   signal: Signal
 }
 
+// Daemon writes reasons[0] = "Trade {style} {side} sedang OPEN ..." when it
+// blocks new signal because previous trade hasn't closed yet (runner.py
+// _block_if_running). Detecting this prefix lets the card render a distinct
+// "TRADE RUNNING" state instead of a generic FLAT.
+const TRADE_RUNNING_PREFIX = 'Trade '
+const TRADE_RUNNING_MARKER = 'sedang OPEN'
+
+function isTradeRunning(side: string, reasons: string[]): boolean {
+  if (side !== 'FLAT' || reasons.length === 0) return false
+  const r = reasons[0]
+  return r.startsWith(TRADE_RUNNING_PREFIX) && r.includes(TRADE_RUNNING_MARKER)
+}
+
 export default function SignalCard({ style, signal }: Props) {
   const [expanded, setExpanded] = useState(false)
   const { side, confidence, confluence_count, reasons, risks } = signal
@@ -18,11 +31,16 @@ export default function SignalCard({ style, signal }: Props) {
   const isBuy  = side === 'LONG'
   const isSell = side === 'SHORT'
   const isFlat = side === 'FLAT'
+  const isRunning = isTradeRunning(side, reasons)
 
-  const borderColor = isBuy ? 'border-green-500' : isSell ? 'border-red-500' : 'border-slate-600'
-  const bgColor     = isBuy ? 'bg-green-950/60'  : isSell ? 'bg-red-950/60'  : 'bg-slate-800/60'
-  const actionColor = isBuy ? 'text-green-400'   : isSell ? 'text-red-400'   : 'text-slate-400'
-  const barColor    = isBuy ? 'bg-green-500'      : isSell ? 'bg-red-500'     : 'bg-slate-500'
+  const borderColor = isRunning ? 'border-amber-600/60'
+    : isBuy ? 'border-green-500' : isSell ? 'border-red-500' : 'border-slate-600'
+  const bgColor = isRunning ? 'bg-amber-950/30'
+    : isBuy ? 'bg-green-950/60' : isSell ? 'bg-red-950/60' : 'bg-slate-800/60'
+  const actionColor = isRunning ? 'text-amber-300'
+    : isBuy ? 'text-green-400' : isSell ? 'text-red-400' : 'text-slate-400'
+  const barColor = isRunning ? 'bg-amber-500'
+    : isBuy ? 'bg-green-500' : isSell ? 'bg-red-500' : 'bg-slate-500'
 
   return (
     <div className={cn(
@@ -33,24 +51,31 @@ export default function SignalCard({ style, signal }: Props) {
       <div className="flex justify-between items-start">
         <div>
           <p className="text-xs text-slate-400 font-medium">{STYLE_LABEL[style]}</p>
-          <p className={cn('text-xl font-black mt-0.5', actionColor)}>
-            {ACTION_LABEL[side]}
+          <p className={cn('text-xl font-black mt-0.5 flex items-center gap-1.5', actionColor)}>
+            {isRunning && <Hourglass size={16} className="text-amber-400" />}
+            {isRunning ? 'TRADE RUNNING' : ACTION_LABEL[side]}
           </p>
         </div>
         <div className="text-right">
-          <p className="text-xs text-slate-400">Keyakinan</p>
-          <p className="text-lg font-bold tabular-nums">{fmtPct(confidence)}</p>
+          <p className="text-xs text-slate-400">{isRunning ? 'Status' : 'Keyakinan'}</p>
+          <p className="text-lg font-bold tabular-nums">
+            {isRunning ? '—' : fmtPct(confidence)}
+          </p>
         </div>
       </div>
 
-      {/* Confidence progress bar */}
-      <div className="mt-3 bg-slate-700/50 rounded-full h-1.5">
-        <div
-          className={cn('h-1.5 rounded-full transition-all duration-700', barColor)}
-          style={{ width: fmtPct(confidence) }}
-        />
-      </div>
-      <p className="text-[10px] text-slate-500 mt-1">{confluence_count} faktor sepakat</p>
+      {/* Confidence progress bar — hidden saat trade running (gak relevan) */}
+      {!isRunning && (
+        <>
+          <div className="mt-3 bg-slate-700/50 rounded-full h-1.5">
+            <div
+              className={cn('h-1.5 rounded-full transition-all duration-700', barColor)}
+              style={{ width: fmtPct(confidence) }}
+            />
+          </div>
+          <p className="text-[10px] text-slate-500 mt-1">{confluence_count} faktor sepakat</p>
+        </>
+      )}
 
       {/* Levels (non-flat only) */}
       {!isFlat && (
@@ -62,8 +87,15 @@ export default function SignalCard({ style, signal }: Props) {
         </div>
       )}
 
-      {/* Flat explanation */}
-      {isFlat && (
+      {/* Trade running — distinct from regular FLAT */}
+      {isRunning && (
+        <p className="mt-3 text-xs text-amber-200/90 bg-amber-900/20 border border-amber-800/40 rounded-xl px-3 py-2 leading-relaxed">
+          {reasons[0]} Lihat di <span className="font-semibold text-amber-100">Portfolio</span> buat tracking realtime.
+        </p>
+      )}
+
+      {/* Flat explanation (real flat only, not trade-running) */}
+      {isFlat && !isRunning && (
         <p className="mt-3 text-xs text-slate-400 bg-slate-700/30 rounded-xl px-3 py-2 leading-relaxed">
           {explainFlat(reasons)}
         </p>

@@ -100,7 +100,15 @@ def evaluate_confluence(
             reason=f"insufficient agreement (need {cfg['min_sources_agree']}, got long={long_n} short={short_n})",
         )
 
-    # Compute blended confidence — weighted avg of agreeing sources
+    # Confidence blending: use MAX of agreeing sources (was MEAN — unfair when
+    # one source is strong and the other is naturally conservative).
+    #
+    # Why MAX: RCS confidence_pct = |rcs_score|*100 capped 95 → typically 25-50%
+    # because rcs_score rarely exceeds 0.5. Style strategy confidence comes from
+    # confluence_count/4 + alignment factors → 0.65-0.90 when set up. MEAN drags
+    # the strong style signal down to RCS level even though they agree on
+    # direction. MAX rewards the strongest agreeing signal while still requiring
+    # at least N sources to agree (counted above).
     confs = []
     if style_dir == direction:
         confs.append(float(style_signal.get("confidence", 0)))
@@ -108,7 +116,7 @@ def evaluate_confluence(
         confs.append(float((rcs_result or {}).get("confidence_pct", 0)) / 100.0)
     if deb_dir == direction:
         confs.append(float(debate_dict.get("confidence", 0)))
-    confidence_blended = sum(confs) / len(confs) if confs else 0.0
+    confidence_blended = max(confs) if confs else 0.0
 
     # Final confidence gate
     if confidence_blended < cfg["min_confidence"]:

@@ -162,6 +162,10 @@ class TradeUpdate:
     hit_sl:  bool = False
     high_after_open: Optional[float] = None
     low_after_open:  Optional[float] = None
+    # Migration 013: SL movement (BEP / lock-TP1). When set, the active_trades
+    # row's `sl` column is updated to this value. Original SL stays in
+    # `original_sl` for R-unit normalization.
+    sl_new:    Optional[float] = None
     closed:    bool = False
     status:    Optional[str] = None         # 'OPEN' | 'TP1' | 'TP2' | 'TP3' | 'SL' | 'EXPIRED'
     exit_price: Optional[float] = None
@@ -260,6 +264,8 @@ def open_trade_if_eligible(
         "confidence":      confidence,
         "entry":           round(entry, 2),
         "sl":              round(sl, 2),
+        # Migration 013: freeze original SL for pnl_r normalization (1R = original risk).
+        "original_sl":     round(sl, 2),
         "tp1":             round(tp1, 2),
         "tp2":             round(float(signal.get("tp2") or 0), 2) or None,
         "tp3":             round(float(signal.get("tp3") or 0), 2) or None,
@@ -285,8 +291,10 @@ def open_trade_if_eligible(
     # IMPROVEMENT #4: graceful degrade if migration 004 not yet applied.
     # New columns (risk_pct, kelly_fraction, profile, prior_*) only exist after
     # migration 004 — fall back to legacy schema if INSERT fails with column error.
+    # Migration 013 adds original_sl — also drop on legacy retry.
     KELLY_FIELDS = ("risk_pct", "kelly_fraction", "profile",
-                    "prior_winrate", "prior_avg_win_r", "prior_n_closed")
+                    "prior_winrate", "prior_avg_win_r", "prior_n_closed",
+                    "original_sl", "sl_moved_at")
 
     try:
         r = store._client.from_("active_trades").insert(payload).execute()
@@ -350,11 +358,23 @@ def update_open_trades(store, df_5m: pd.DataFrame, log=print) -> int:
             patch = _update_to_dict(update)
             if not patch:
                 continue
-            store._client.from_("active_trades").update(patch).eq("id", trade["id"]).execute()
+            try:
+                store._client.from_("active_trades").update(patch).eq("id", trade["id"]).execute()
+            except Exception as e:
+                # Migration 013 not applied → drop sl_moved_at and retry
+                if "sl_moved_at" in str(e).lower() or "column" in str(e).lower():
+                    patch.pop("sl_moved_at", None)
+                    store._client.from_("active_trades").update(patch).eq("id", trade["id"]).execute()
+                else:
+                    raise
             modified += 1
+            if update.sl_new is not None and not update.closed:
+                bep_label = "BEP" if abs(update.sl_new - float(trade["entry"])) < 0.01 else "lock-TP1"
+                log(f"[tracker] {trade['style']} SL moved to {update.sl_new:.2f} ({bep_label}) "
+                    f"id={str(trade['id'])[:8]}")
             if update.closed:
                 log(f"[tracker] CLOSED {trade['style']} {trade['side']} -> {update.status} pnl={update.pnl_r}R "
-                    f"id={str(trade['id'])[:8]}")
+                    f"reason={update.exit_reason} id={str(trade['id'])[:8]}")
         except Exception as e:
             log(f"[tracker] update trade {trade.get('id','?')[:8]} failed: {e}")
 
@@ -362,9 +382,22 @@ def update_open_trades(store, df_5m: pd.DataFrame, log=print) -> int:
 
 
 def _evaluate_trade(trade: dict, df_5m: pd.DataFrame, now: datetime) -> Optional[TradeUpdate]:
-    """Decide what to update for this trade based on candles since last_check_at."""
+    """Decide what to update for this trade based on candles since last_check_at.
+
+    Migration 013 — BEP/lock-TP1 logic (mirror of EA v0.2.0):
+        TP1 hit  → SL moved to entry      (BEP, locks 0R minimum)
+        TP2 hit  → SL moved to TP1        (locks +1R minimum)
+        TP3 hit  → close at TP3           (full target +N R)
+        SL hit   → close at current SL.
+                   pnl_r = (exit - entry) / |entry - original_sl|
+                   so a BEP exit shows +0R; a lock-TP1 exit shows +1R.
+    """
     side = trade["side"]
     sl   = float(trade["sl"])
+    # Migration 013: original_sl preserved for R-unit normalization. Falls back
+    # to current sl for legacy rows without the column or null backfill.
+    original_sl_raw = trade.get("original_sl")
+    original_sl = float(original_sl_raw) if original_sl_raw is not None else sl
     entry = float(trade["entry"])
     tp1  = float(trade.get("tp1") or 0)
     tp2  = float(trade.get("tp2") or 0)
@@ -374,6 +407,16 @@ def _evaluate_trade(trade: dict, df_5m: pd.DataFrame, now: datetime) -> Optional
     hit_tp3 = bool(trade.get("hit_tp3"))
     high_after = float(trade.get("high_after_open") or entry)
     low_after  = float(trade.get("low_after_open") or entry)
+
+    # Original SL distance — used as R unit for ALL pnl_r computations.
+    original_sl_dist = abs(entry - original_sl)
+
+    def _r(exit_price: float) -> float:
+        """Compute pnl_r using original_sl distance as 1R unit."""
+        if original_sl_dist <= 0:
+            return 0.0
+        realised = (exit_price - entry) if side == "LONG" else (entry - exit_price)
+        return round(realised / original_sl_dist, 3)
 
     last_check = trade.get("last_check_at") or trade.get("opened_at")
     last_check_dt = pd.Timestamp(last_check)
@@ -388,6 +431,8 @@ def _evaluate_trade(trade: dict, df_5m: pd.DataFrame, now: datetime) -> Optional
         hit_tp1=hit_tp1, hit_tp2=hit_tp2, hit_tp3=hit_tp3,
         high_after_open=high_after, low_after_open=low_after,
     )
+    # Working copy of SL — may be moved to entry (BEP) or TP1 (lock) within this loop.
+    cur_sl = sl
 
     closed_in_bar = False
 
@@ -397,16 +442,19 @@ def _evaluate_trade(trade: dict, df_5m: pd.DataFrame, now: datetime) -> Optional
         upd.low_after_open  = min(upd.low_after_open or l, l)
 
         if side == "LONG":
-            # Check SL first (worst-case fill)
-            if l <= sl:
+            # Check SL FIRST against the CURRENT (possibly moved) SL.
+            if l <= cur_sl:
                 upd.closed = True
                 upd.status = "SL"
-                upd.exit_price = sl
-                upd.exit_reason = "sl_hit"
+                upd.exit_price = cur_sl
+                upd.exit_reason = "sl_hit" if cur_sl <= original_sl else (
+                    "bep_hit" if cur_sl == entry else "lock_tp1_hit"
+                )
                 upd.closed_at = ts.isoformat() if hasattr(ts, "isoformat") else now.isoformat()
-                upd.pnl_r = -1.0
-                upd.pnl_pct = (sl - entry) / entry * 100
-                upd.hit_sl = True
+                upd.pnl_r = _r(cur_sl)
+                upd.pnl_pct = round((cur_sl - entry) / entry * 100, 4)
+                upd.hit_sl = (cur_sl <= original_sl)   # only flag full SL hit, not BEP exit
+                upd.sl_new = cur_sl if cur_sl != sl else None
                 closed_in_bar = True
                 break
             # TP3 = full target
@@ -417,24 +465,35 @@ def _evaluate_trade(trade: dict, df_5m: pd.DataFrame, now: datetime) -> Optional
                 upd.exit_price = tp3
                 upd.exit_reason = "tp_hit"
                 upd.closed_at = ts.isoformat() if hasattr(ts, "isoformat") else now.isoformat()
-                # Compute R from sl distance
-                slDist = abs(entry - sl)
-                upd.pnl_r = round((tp3 - entry) / slDist, 3) if slDist > 0 else 3.0
-                upd.pnl_pct = (tp3 - entry) / entry * 100
+                upd.pnl_r = _r(tp3)
+                upd.pnl_pct = round((tp3 - entry) / entry * 100, 4)
                 closed_in_bar = True
                 break
-            # Soft hits (track but don't close)
-            if tp1 > 0 and h >= tp1: upd.hit_tp1 = True
-            if tp2 > 0 and h >= tp2: upd.hit_tp2 = True
+            # Soft hits — flag + move SL (BEP/lock-TP1 in EA-aligned style).
+            if tp1 > 0 and h >= tp1 and not upd.hit_tp1:
+                upd.hit_tp1 = True
+                # Move SL to entry (BEP). cur_sl monotonically increases for LONG.
+                if cur_sl < entry:
+                    cur_sl = entry
+                    upd.sl_new = cur_sl
+            if tp2 > 0 and h >= tp2 and not upd.hit_tp2:
+                upd.hit_tp2 = True
+                # Lock-in TP1 (LONG: tp1 > entry, so cur_sl moves up further).
+                if tp1 > 0 and cur_sl < tp1:
+                    cur_sl = tp1
+                    upd.sl_new = cur_sl
         else:
-            # SHORT
-            if h >= sl:
-                upd.closed = True; upd.status = "SL"; upd.exit_price = sl
-                upd.exit_reason = "sl_hit"
+            # SHORT — mirrored. cur_sl monotonically decreases.
+            if h >= cur_sl:
+                upd.closed = True; upd.status = "SL"; upd.exit_price = cur_sl
+                upd.exit_reason = "sl_hit" if cur_sl >= original_sl else (
+                    "bep_hit" if cur_sl == entry else "lock_tp1_hit"
+                )
                 upd.closed_at = ts.isoformat() if hasattr(ts, "isoformat") else now.isoformat()
-                upd.pnl_r = -1.0
-                upd.pnl_pct = (entry - sl) / entry * 100
-                upd.hit_sl = True
+                upd.pnl_r = _r(cur_sl)
+                upd.pnl_pct = round((entry - cur_sl) / entry * 100, 4)
+                upd.hit_sl = (cur_sl >= original_sl)
+                upd.sl_new = cur_sl if cur_sl != sl else None
                 closed_in_bar = True
                 break
             if tp3 > 0 and l <= tp3:
@@ -442,13 +501,20 @@ def _evaluate_trade(trade: dict, df_5m: pd.DataFrame, now: datetime) -> Optional
                 upd.closed = True; upd.status = "TP3"; upd.exit_price = tp3
                 upd.exit_reason = "tp_hit"
                 upd.closed_at = ts.isoformat() if hasattr(ts, "isoformat") else now.isoformat()
-                slDist = abs(entry - sl)
-                upd.pnl_r = round((entry - tp3) / slDist, 3) if slDist > 0 else 3.0
-                upd.pnl_pct = (entry - tp3) / entry * 100
+                upd.pnl_r = _r(tp3)
+                upd.pnl_pct = round((entry - tp3) / entry * 100, 4)
                 closed_in_bar = True
                 break
-            if tp1 > 0 and l <= tp1: upd.hit_tp1 = True
-            if tp2 > 0 and l <= tp2: upd.hit_tp2 = True
+            if tp1 > 0 and l <= tp1 and not upd.hit_tp1:
+                upd.hit_tp1 = True
+                if cur_sl > entry:
+                    cur_sl = entry
+                    upd.sl_new = cur_sl
+            if tp2 > 0 and l <= tp2 and not upd.hit_tp2:
+                upd.hit_tp2 = True
+                if tp1 > 0 and cur_sl > tp1:
+                    cur_sl = tp1
+                    upd.sl_new = cur_sl
 
     if closed_in_bar:
         return upd
@@ -462,14 +528,7 @@ def _evaluate_trade(trade: dict, df_5m: pd.DataFrame, now: datetime) -> Optional
         upd.exit_price = last_close
         upd.exit_reason = "expired"
         upd.closed_at = now.isoformat()
-        slDist = abs(entry - sl)
-        if slDist > 0:
-            upd.pnl_r = round(
-                ((last_close - entry) if side == "LONG" else (entry - last_close)) / slDist,
-                3,
-            )
-        else:
-            upd.pnl_r = 0.0
+        upd.pnl_r = _r(last_close)
         upd.pnl_pct = round(
             ((last_close - entry) if side == "LONG" else (entry - last_close)) / entry * 100,
             4,
@@ -485,9 +544,11 @@ def _check_expiry(trade: dict, now: datetime, df_5m: pd.DataFrame) -> Optional[T
         return None
     last_close = float(df_5m.iloc[-1]["close"])
     entry = float(trade["entry"])
-    sl    = float(trade["sl"])
     side  = trade["side"]
-    slDist = abs(entry - sl)
+    # Migration 013: pnl_r normalised to original_sl distance.
+    original_sl_raw = trade.get("original_sl")
+    original_sl = float(original_sl_raw) if original_sl_raw is not None else float(trade["sl"])
+    slDist = abs(entry - original_sl)
     pnl_r = 0.0
     if slDist > 0:
         pnl_r = round(
@@ -512,6 +573,10 @@ def _update_to_dict(u: TradeUpdate) -> dict:
     if u.hit_sl:  out["hit_sl"]  = True
     if u.high_after_open is not None: out["high_after_open"] = round(u.high_after_open, 2)
     if u.low_after_open  is not None: out["low_after_open"]  = round(u.low_after_open, 2)
+    # Migration 013: persist BEP/lock-TP1 SL movement to active_trades.sl
+    if u.sl_new is not None:
+        out["sl"] = round(u.sl_new, 2)
+        out["sl_moved_at"] = datetime.now(timezone.utc).isoformat()
     if u.closed:
         out["status"]      = u.status
         out["closed_at"]   = u.closed_at
