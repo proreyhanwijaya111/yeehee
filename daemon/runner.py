@@ -27,6 +27,7 @@ try:
     from rcs.composite import compute_rcs
     from rcs.persistence import push_rcs_signal
     from rcs.outcome_tracker import evaluate_pending_signals as rcs_evaluate_outcomes
+    from rcs.confluence import evaluate_confluence, promote_signal_for_ea
     RCS_AVAILABLE = True
 except ImportError:
     RCS_AVAILABLE = False
@@ -193,6 +194,11 @@ def run_once(store: SettingsStore, settings: dict, log=print, trigger_reason: st
     if is_primary:
         bundle_id = store.push_signal_bundle(bundle)
 
+        # ── Per-style confluence: promote to PENDING_PICKUP if all gates pass ─
+        # Multi-source agreement: ML/RCS + 12-agent + per-style strategy must agree.
+        # Only signals that pass confluence get marked is_executable=true. EA picks up.
+        rcs_ids_per_style = {}   # style -> rcs_signal_id (filled below)
+
         # ── Push RCS to rcs_signals (PRIMARY only) ────────────────────────────
         # Used by /more/rcs-monitor UI for history + accuracy tracking, and as
         # data source for future MT5 EA bot polling.
@@ -214,7 +220,7 @@ def run_once(store: SettingsStore, settings: dict, log=print, trigger_reason: st
                 # (RCS itself doesn't compute levels — just direction. Levels are
                 # for future EA consumption based on user's preferred TF.)
                 sig_levels = sig_intraday.to_dict()
-                push_rcs_signal(
+                rcs_id = push_rcs_signal(
                     store=store,
                     result=result_obj,
                     timeframe="M15",
@@ -227,8 +233,38 @@ def run_once(store: SettingsStore, settings: dict, log=print, trigger_reason: st
                     tp2=sig_levels.get("tp2"),
                     log=log,
                 )
+                if rcs_id:
+                    rcs_ids_per_style["intraday"] = rcs_id
             except Exception as e:
                 log(f"[rcs] push_rcs_signal failed: {e!r}")
+
+            # ── Confluence per style: promote to PENDING_PICKUP if gates pass ──
+            # ML/composite + RCS direction + 12-agent debate + per-style strategy
+            # must agree (2-of-3 for intraday/swing, 3-of-3 for scalper).
+            try:
+                for style_name, sig_obj in (
+                    ("scalper",  sig_scalper),
+                    ("intraday", sig_intraday),
+                    ("swing",    sig_swing),
+                ):
+                    style_dict = sig_obj.to_dict()
+                    decision = evaluate_confluence(
+                        style=style_name,
+                        style_signal=style_dict,
+                        rcs_result=rcs_result_dict,
+                        debate_dict=debate_dict,
+                    )
+                    log(f"[confluence] {style_name:8s} dir={decision.direction} "
+                        f"agree={decision.sources_agreeing}/3 conf_blend={decision.confidence_blended:.2f} "
+                        f"executable={decision.is_executable} | {decision.reason[:80]}")
+                    # Only promote intraday signal (rcs_id is for intraday TF)
+                    # In future: per-style RCS rows for scalper/swing too.
+                    if decision.is_executable and style_name == "intraday":
+                        rcs_id = rcs_ids_per_style.get("intraday")
+                        if rcs_id:
+                            promote_signal_for_ea(store, rcs_id, style_name, decision, log=log)
+            except Exception as e:
+                log(f"[confluence] error: {e!r}")
     else:
         log("[runner] STANDBY mode — skip push_signal_bundle (primary handles it)")
 

@@ -100,7 +100,15 @@ DERIVED_FEATURE_FN = "_compute_derived_features"
 
 
 def _compute_derived_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Add derived features that aren't in technical.add_all."""
+    """Add derived features that aren't in technical.add_all.
+
+    v0.2.2: expanded feature set for better accuracy:
+      - Time-of-day cyclical features (hour_sin/cos, dow_sin/cos)
+      - Session indicator (asia/london/ny/overlap)
+      - Volatility regime category (low/normal/high/extreme)
+      - Bollinger band breakout indicators
+      - Volume regime (when volume data available)
+    """
     out = df.copy()
 
     # EMA spread features (normalized by close)
@@ -122,6 +130,76 @@ def _compute_derived_features(df: pd.DataFrame) -> pd.DataFrame:
     atr_rank = out["atr14"].rolling(100, min_periods=20).rank(pct=True)
     out["atr_pct_rank"] = atr_rank
 
+    # === v0.2.2 NEW FEATURES ===
+
+    # Time-of-day cyclical encoding (gold has strong intraday pattern):
+    #   sin/cos pair captures cyclical nature so model treats hour 23 close to hour 0
+    if isinstance(out.index, pd.DatetimeIndex):
+        idx_utc = out.index.tz_convert("UTC") if out.index.tz else out.index
+        hour    = idx_utc.hour
+        dow     = idx_utc.dayofweek
+        out["hour_sin"] = np.sin(2 * np.pi * hour / 24)
+        out["hour_cos"] = np.cos(2 * np.pi * hour / 24)
+        out["dow_sin"]  = np.sin(2 * np.pi * dow / 7)
+        out["dow_cos"]  = np.cos(2 * np.pi * dow / 7)
+
+        # Session indicator (UTC):
+        #   asia    : 00-07 UTC
+        #   london  : 07-12 UTC (before NY overlap)
+        #   overlap : 12-16 UTC (London-NY peak liquidity)
+        #   ny      : 16-21 UTC
+        #   late    : 21-24 UTC (low vol)
+        out["sess_asia"]    = ((hour >= 0)  & (hour < 7)).astype(int)
+        out["sess_london"]  = ((hour >= 7)  & (hour < 12)).astype(int)
+        out["sess_overlap"] = ((hour >= 12) & (hour < 16)).astype(int)
+        out["sess_ny"]      = ((hour >= 16) & (hour < 21)).astype(int)
+        out["sess_late"]    = ((hour >= 21) | (hour == 0)).astype(int)
+    else:
+        # Fallback if not datetime index
+        for c in ("hour_sin", "hour_cos", "dow_sin", "dow_cos",
+                 "sess_asia", "sess_london", "sess_overlap", "sess_ny", "sess_late"):
+            out[c] = 0.0
+
+    # Volatility regime category (one-hot encoded)
+    if "atr_pct_rank" in out.columns:
+        out["vol_low"]     = (out["atr_pct_rank"] < 0.30).astype(int)
+        out["vol_normal"]  = ((out["atr_pct_rank"] >= 0.30) & (out["atr_pct_rank"] < 0.70)).astype(int)
+        out["vol_high"]    = ((out["atr_pct_rank"] >= 0.70) & (out["atr_pct_rank"] < 0.90)).astype(int)
+        out["vol_extreme"] = (out["atr_pct_rank"] >= 0.90).astype(int)
+    else:
+        for c in ("vol_low", "vol_normal", "vol_high", "vol_extreme"):
+            out[c] = 0
+
+    # Bollinger band breakout indicators
+    if "bb_pctb" in out.columns:
+        out["bb_breakout_up"]   = (out["bb_pctb"] > 1.0).astype(int)
+        out["bb_breakout_down"] = (out["bb_pctb"] < 0.0).astype(int)
+        out["bb_squeeze"]       = (out.get("bb_width", pd.Series(0, index=out.index))
+                                   .rolling(20, min_periods=5).rank(pct=True) < 0.20).astype(int)
+    else:
+        for c in ("bb_breakout_up", "bb_breakout_down", "bb_squeeze"):
+            out[c] = 0
+
+    # Volume regime (when volume data available)
+    if "volume" in out.columns:
+        vol_avg5  = out["volume"].rolling(5, min_periods=1).mean()
+        vol_avg20 = out["volume"].rolling(20, min_periods=1).mean()
+        out["volume_ratio_5_20"] = (vol_avg5 / vol_avg20.replace(0, np.nan)).fillna(1.0)
+        out["volume_spike"]      = (out["volume"] > 3 * vol_avg20).astype(int)
+    else:
+        out["volume_ratio_5_20"] = 1.0
+        out["volume_spike"]      = 0
+
+    # Trend-strength features (interaction of ADX with DI dominance)
+    if "adx" in out.columns and "plus_di" in out.columns and "minus_di" in out.columns:
+        out["di_diff"]      = out["plus_di"] - out["minus_di"]
+        out["adx_strong"]   = (out["adx"] > 25).astype(int)
+        out["adx_trending"] = ((out["adx"] > 20) & (out["adx"] <= 25)).astype(int)
+    else:
+        out["di_diff"] = 0
+        out["adx_strong"] = 0
+        out["adx_trending"] = 0
+
     # SMC boolean flags (already added by add_all_smc)
     for col in ("bull_sweep", "bear_sweep", "fvg_bull", "fvg_bear", "bos_up", "bos_dn"):
         if col in out.columns:
@@ -133,12 +211,24 @@ def _compute_derived_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _expanded_feature_list() -> list[str]:
-    """Final feature list = base technical + derived."""
+    """Final feature list = base technical + derived (v0.2.2 expanded)."""
     derived = [
+        # Existing (v0.2.1)
         "ema_20_50_diff_pct", "ema_50_200_diff_pct", "price_vs_ema_200",
         "ret_1", "ret_3", "ret_5", "ret_10",
         "rsi_slope_5", "macd_hist_slope_3", "atr_pct_rank",
         "bull_sweep", "bear_sweep", "fvg_bull", "fvg_bear", "bos_up", "bos_dn",
+        # NEW v0.2.2 — time + session
+        "hour_sin", "hour_cos", "dow_sin", "dow_cos",
+        "sess_asia", "sess_london", "sess_overlap", "sess_ny", "sess_late",
+        # NEW v0.2.2 — volatility regime
+        "vol_low", "vol_normal", "vol_high", "vol_extreme",
+        # NEW v0.2.2 — BB breakout
+        "bb_breakout_up", "bb_breakout_down", "bb_squeeze",
+        # NEW v0.2.2 — volume regime
+        "volume_ratio_5_20", "volume_spike",
+        # NEW v0.2.2 — trend strength
+        "di_diff", "adx_strong", "adx_trending",
     ]
     return FEATURE_COLS + derived
 
@@ -361,11 +451,90 @@ def train_models(tf: str, source: str = "yfinance", use_optuna: bool = False,
         **best_params,
     )
     xgb.fit(X_train_s, y_train, sample_weight=sample_weights)
-    xgb_pred  = xgb.predict(X_test_s)
-    xgb_proba = xgb.predict_proba(X_test_s)
+
+    # ── Ensemble + isotonic calibration (v0.2.3) ─────────────────────────────
+    # Stack LogReg + XGBoost: LogReg captures linear patterns, XGB non-linear.
+    # Soft-voting with weighted average. Then isotonic calibration on the ensemble.
+    # Fitted on first 80% of train, calibrated on last 20% (chronological, NO leak).
+    try:
+        from sklearn.calibration import CalibratedClassifierCV
+        from sklearn.ensemble import VotingClassifier
+        log("[train] building ensemble (LogReg + XGB) + isotonic calibration...")
+        cal_split = int(len(X_train_s) * 0.80)
+        X_fit, X_cal = X_train_s[:cal_split], X_train_s[cal_split:]
+        y_fit, y_cal = y_train[:cal_split], y_train[cal_split:]
+        sw_fit = compute_sample_weight(class_weight="balanced", y=y_fit)
+
+        # Re-train base models on the calibration-fit subset
+        lr_base = LogisticRegression(max_iter=1000, solver="lbfgs",
+                                      class_weight="balanced", random_state=42)
+        lr_base.fit(X_fit, y_fit)
+
+        xgb_base = XGBClassifier(objective="multi:softprob", num_class=3,
+                                  eval_metric="mlogloss", random_state=42, **best_params)
+        xgb_base.fit(X_fit, y_fit, sample_weight=sw_fit)
+
+        # Soft-voting ensemble: XGB weight 2, LogReg weight 1 (XGB is stronger)
+        ensemble = VotingClassifier(
+            estimators=[("xgb", xgb_base), ("lr", lr_base)],
+            voting="soft",
+            weights=[2, 1],
+        )
+        # Just fit ensemble (uses pre-trained estimators internally)
+        ensemble.estimators_ = [xgb_base, lr_base]
+        ensemble.le_         = None  # bypass label-encoder; we use 0/1/2 ints
+        # workaround: fit on tiny subset to register classes_
+        ensemble.fit(X_fit[:100], y_fit[:100])
+        # Override estimators_ back to our pre-trained ones
+        ensemble.estimators_ = [xgb_base, lr_base]
+
+        # Isotonic calibration on calibration set
+        xgb_cal = CalibratedClassifierCV(ensemble, method="isotonic", cv="prefit")
+        xgb_cal.fit(X_cal, y_cal)
+
+        xgb_eval_model = xgb_cal
+        log("[train] ensemble + calibration done")
+    except Exception as e:
+        log(f"[train] ensemble/calibration skipped: {e}")
+        traceback.print_exc()
+        xgb_eval_model = xgb
+    # Use calibrated model for OOS eval (better-calibrated probabilities)
+    xgb_pred  = xgb_eval_model.predict(X_test_s)
+    xgb_proba = xgb_eval_model.predict_proba(X_test_s)
     xgb_acc   = accuracy_score(y_test, xgb_pred)
     xgb_loss  = log_loss(y_test, xgb_proba, labels=[0, 1, 2])
     log(f"[train] XGB OOS accuracy={xgb_acc:.4f}, log_loss={xgb_loss:.4f}")
+
+    # ── High-confidence filtering metric (v0.2.2) ─────────────────────────
+    # Real trading edge: only act when model is CONFIDENT.
+    # Compute accuracy at different confidence thresholds.
+    log("[train] high-confidence filtering analysis:")
+    max_probs = xgb_proba.max(axis=1)
+    for threshold in (0.50, 0.55, 0.60, 0.65, 0.70):
+        mask = max_probs >= threshold
+        n_signals = int(mask.sum())
+        if n_signals < 10:
+            continue
+        filt_acc = accuracy_score(y_test[mask], xgb_pred[mask])
+        coverage = n_signals / len(y_test)
+        log(f"  conf>={threshold:.2f}: acc={filt_acc:.4f} ({n_signals} signals, coverage={coverage*100:.1f}%)")
+
+    # ── Walk-forward validation report (v0.2.2) ──────────────────────────
+    # Split test set into 5 chronological segments; report acc per segment.
+    # Identifies if model degrades over time (concept drift signal).
+    log("[train] walk-forward (5 segments) analysis:")
+    seg_size = len(X_test_s) // 5
+    walk_forward_accs = []
+    for i in range(5):
+        s, e = i * seg_size, (i + 1) * seg_size if i < 4 else len(X_test_s)
+        if e - s < 10: continue
+        seg_pred = xgb_pred[s:e]
+        seg_acc  = accuracy_score(y_test[s:e], seg_pred)
+        walk_forward_accs.append(seg_acc)
+        log(f"  segment {i+1}/5: n={e-s} acc={seg_acc:.4f}")
+    wf_std = float(np.std(walk_forward_accs)) if walk_forward_accs else 0.0
+    wf_mean = float(np.mean(walk_forward_accs)) if walk_forward_accs else 0.0
+    log(f"  walk-forward: mean={wf_mean:.4f} std={wf_std:.4f}")
 
     # Per-class precision/recall
     report = classification_report(y_test, xgb_pred, target_names=["SHORT", "NEUTRAL", "LONG"], output_dict=True, zero_division=0)
@@ -377,14 +546,16 @@ def train_models(tf: str, source: str = "yfinance", use_optuna: bool = False,
     version = f"xgb_{tf}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     model_path = models_dir / f"xgb_{tf}.pkl"
 
+    # Save the CALIBRATED model (better real-world probabilities)
     joblib.dump({
-        "model":         xgb,
+        "model":         xgb_eval_model,
         "scaler":        scaler,
         "feature_list":  available,
         "version":       version,
         "trained_at":    datetime.now(timezone.utc).isoformat(),
+        "calibrated":    xgb_eval_model is not xgb,
     }, model_path)
-    log(f"[train] saved model to {model_path}")
+    log(f"[train] saved model to {model_path} (calibrated={xgb_eval_model is not xgb})")
 
     metadata = {
         "version":              version,
