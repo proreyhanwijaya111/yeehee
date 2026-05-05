@@ -210,6 +210,82 @@ export async function runBacktest(params: MCBacktestRequest): Promise<MCBacktest
   return res.json()
 }
 
+// ── Historical backtest (real XAU/USD OHLCV + rule-engine) ─────────────────────
+
+export interface HistoricalBacktestRequest {
+  interval?:        '1h' | '4h' | '1day'
+  lookback_days?:   number
+  starting_equity?: number
+  risk_per_trade?:  number
+  n_runs?:          number
+  api_key?:         string
+}
+
+export interface HistoricalTrade {
+  bar_idx:    number
+  entry_time: string
+  exit_time:  string
+  side:       'LONG' | 'SHORT'
+  entry:      number
+  sl:         number
+  tp:         number
+  exit_price: number
+  pnl_r:      number
+  outcome:    'TP' | 'SL' | 'TIMEOUT'
+}
+
+export interface HistoricalBacktestResult {
+  config: {
+    interval: string
+    lookback_days: number
+    n_bars: number
+    starting_equity: number
+    risk_per_trade: number
+  }
+  trades: HistoricalTrade[]
+  stats: {
+    n_trades: number
+    n_wins: number
+    n_losses: number
+    win_rate: number
+    avg_win_r: number
+    avg_loss_r: number
+    expectancy_r: number
+    max_consecutive_losses: number
+  }
+  equity_curve: Array<{ time: string; equity: number }>
+  monte_carlo: {
+    n_runs: number
+    final_equity_p5: number
+    final_equity_p25: number
+    final_equity_p50: number
+    final_equity_p75: number
+    final_equity_p95: number
+    max_dd_p5: number
+    max_dd_p50: number
+    max_dd_p95: number
+    prob_profit: number
+    prob_drawdown_30: number
+    prob_blowup: number
+  }
+  duration_ms: number
+}
+
+export async function runHistoricalBacktest(params: HistoricalBacktestRequest): Promise<HistoricalBacktestResult> {
+  const res = await fetch('/api/backtest-historical', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    let msg = text
+    try { msg = JSON.parse(text).error || text } catch {}
+    throw new Error(`Historical backtest gagal: ${msg}`)
+  }
+  return res.json()
+}
+
 // Legacy alias - dipakai oleh halaman /more/backtest sebelum refactor.
 export async function runBacktestLegacy(params: {
   interval: string
