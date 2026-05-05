@@ -197,15 +197,15 @@ def run_once(store: SettingsStore, settings: dict, log=print, trigger_reason: st
         # ── Per-style confluence: promote to PENDING_PICKUP if all gates pass ─
         # Multi-source agreement: ML/RCS + 12-agent + per-style strategy must agree.
         # Only signals that pass confluence get marked is_executable=true. EA picks up.
-        rcs_ids_per_style = {}   # style -> rcs_signal_id (filled below)
+        rcs_ids_per_style: dict[str, int] = {}   # style -> rcs_signal_id
 
-        # ── Push RCS to rcs_signals (PRIMARY only) ────────────────────────────
-        # Used by /more/rcs-monitor UI for history + accuracy tracking, and as
-        # data source for future MT5 EA bot polling.
+        # ── Push RCS to rcs_signals — ONE ROW PER STYLE (M5/M15/H1) ─────────
+        # Each style gets its own RCS row with that style's entry/sl/tp levels.
+        # EA picks the row matching its target TF. Used by /more/rcs-monitor UI
+        # for history + accuracy tracking + MT5 EA polling.
         if RCS_AVAILABLE and rcs_result_dict and bundle.get("xau_price"):
             try:
                 from rcs.composite import RCSResult, ComponentScore
-                # Reconstruct RCSResult from dict so we can pass to push helper
                 comps = [ComponentScore(**c) for c in rcs_result_dict["components"]]
                 result_obj = RCSResult(
                     rcs_score=rcs_result_dict["rcs_score"],
@@ -216,31 +216,38 @@ def run_once(store: SettingsStore, settings: dict, log=print, trigger_reason: st
                     regime=rcs_result_dict.get("regime", regime_label),
                     session=rcs_result_dict.get("session", sess),
                 )
-                # Use intraday signal levels (15m) as default entry/sl/tp for RCS
-                # (RCS itself doesn't compute levels — just direction. Levels are
-                # for future EA consumption based on user's preferred TF.)
-                sig_levels = sig_intraday.to_dict()
-                rcs_id = push_rcs_signal(
-                    store=store,
-                    result=result_obj,
-                    timeframe="M15",
-                    spot_price=float(bundle["xau_price"]),
-                    atr_14=float(df_15m["atr14"].iloc[-1]) if "atr14" in df_15m.columns else 0.0,
-                    broker_symbol="XAUUSD",
-                    entry=sig_levels.get("entry"),
-                    sl=sig_levels.get("sl"),
-                    tp1=sig_levels.get("tp1"),
-                    tp2=sig_levels.get("tp2"),
-                    log=log,
-                )
-                if rcs_id:
-                    rcs_ids_per_style["intraday"] = rcs_id
+                # Per-style: each style has its own TF + levels
+                style_to_tf = {"scalper": "M5", "intraday": "M15", "swing": "H1"}
+                style_to_atr = {
+                    "scalper":  float(df_5m["atr14"].iloc[-1])  if "atr14" in df_5m.columns  else 0.0,
+                    "intraday": float(df_15m["atr14"].iloc[-1]) if "atr14" in df_15m.columns else 0.0,
+                    "swing":    float(df_4h["atr14"].iloc[-1])  if "atr14" in df_4h.columns  else 0.0,
+                }
+                for style_name, sig_obj in (
+                    ("scalper",  sig_scalper),
+                    ("intraday", sig_intraday),
+                    ("swing",    sig_swing),
+                ):
+                    sig_levels = sig_obj.to_dict()
+                    rcs_id = push_rcs_signal(
+                        store=store,
+                        result=result_obj,
+                        timeframe=style_to_tf[style_name],
+                        spot_price=float(bundle["xau_price"]),
+                        atr_14=style_to_atr[style_name],
+                        broker_symbol="XAUUSD",
+                        entry=sig_levels.get("entry"),
+                        sl=sig_levels.get("sl"),
+                        tp1=sig_levels.get("tp1"),
+                        tp2=sig_levels.get("tp2"),
+                        log=log,
+                    )
+                    if rcs_id:
+                        rcs_ids_per_style[style_name] = rcs_id
             except Exception as e:
                 log(f"[rcs] push_rcs_signal failed: {e!r}")
 
             # ── Confluence per style: promote to PENDING_PICKUP if gates pass ──
-            # ML/composite + RCS direction + 12-agent debate + per-style strategy
-            # must agree (2-of-3 for intraday/swing, 3-of-3 for scalper).
             try:
                 for style_name, sig_obj in (
                     ("scalper",  sig_scalper),
@@ -257,12 +264,13 @@ def run_once(store: SettingsStore, settings: dict, log=print, trigger_reason: st
                     log(f"[confluence] {style_name:8s} dir={decision.direction} "
                         f"agree={decision.sources_agreeing}/3 conf_blend={decision.confidence_blended:.2f} "
                         f"executable={decision.is_executable} | {decision.reason[:80]}")
-                    # Only promote intraday signal (rcs_id is for intraday TF)
-                    # In future: per-style RCS rows for scalper/swing too.
-                    if decision.is_executable and style_name == "intraday":
-                        rcs_id = rcs_ids_per_style.get("intraday")
+                    # Promote ANY style that passes confluence (not just intraday)
+                    if decision.is_executable:
+                        rcs_id = rcs_ids_per_style.get(style_name)
                         if rcs_id:
                             promote_signal_for_ea(store, rcs_id, style_name, decision, log=log)
+                        else:
+                            log(f"[confluence] {style_name} executable but no rcs_id — skip promote")
             except Exception as e:
                 log(f"[confluence] error: {e!r}")
     else:

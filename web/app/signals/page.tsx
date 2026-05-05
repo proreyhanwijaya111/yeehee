@@ -16,8 +16,8 @@ export default async function SignalsPage() {
     getLatestRcsSignal('M15').catch(() => null),
   ])
   initialBundle = bundleResult
-  // Inject RCS into bundle.rcs so client doesn't need separate fetch
-  if (initialBundle && rcs) {
+  // RCS priority: bundle.rcs (migration 012) > rcs_signals fallback.
+  if (initialBundle && !initialBundle.rcs && rcs) {
     initialBundle.rcs = {
       rcs_score:      rcs.rcs_score,
       direction:      rcs.direction,

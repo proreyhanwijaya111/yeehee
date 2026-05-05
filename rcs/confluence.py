@@ -23,12 +23,15 @@ from dataclasses import dataclass
 from typing import Optional
 
 
-# Per-style confidence thresholds for execution
-# Lower TF = noisier, need higher confidence
+# Per-style confidence thresholds for execution.
+# Calibrated for live paper-test: too-strict thresholds (3/3 agree + 75% conf)
+# meant scalper signals at 65-72% conf never executed even when 12-agent + RCS
+# both aligned. Relaxed to 2/3 agree + 65% so paper test can collect ≥5 trades/wk
+# of training data. Tighten back after first 30 days if win-rate < 55%.
 EXECUTION_THRESHOLDS = {
-    "scalper":  {"min_confidence": 0.75, "min_rcs_score": 0.45, "min_sources_agree": 3},
-    "intraday": {"min_confidence": 0.70, "min_rcs_score": 0.40, "min_sources_agree": 2},
-    "swing":    {"min_confidence": 0.65, "min_rcs_score": 0.35, "min_sources_agree": 2},
+    "scalper":  {"min_confidence": 0.65, "min_rcs_score": 0.30, "min_sources_agree": 2},
+    "intraday": {"min_confidence": 0.60, "min_rcs_score": 0.25, "min_sources_agree": 2},
+    "swing":    {"min_confidence": 0.55, "min_rcs_score": 0.20, "min_sources_agree": 2},
 }
 
 
@@ -199,10 +202,13 @@ def _smoke():
     print(f"Test 3 (2/3 low conf): executable={d.is_executable} - {d.reason}")
     assert not d.is_executable, "should not execute below conf threshold"
 
-    # Test 4: scalper requires 3/3 (stricter)
-    d = evaluate_confluence("scalper", style_sig, rcs_res, {"final_action": "WAIT", "confidence": 0})
-    print(f"Test 4 (scalper 2/3): executable={d.is_executable} - {d.reason}")
-    assert not d.is_executable, "scalper requires 3/3"
+    # Test 4: scalper with 2/3 agree + low conf → SHOULD NOT execute
+    weak_style = {"side": "LONG", "confidence": 0.40}
+    weak_rcs   = {"direction": "LONG", "confidence_pct": 35, "rcs_score": 0.22}
+    flat = {"final_action": "WAIT", "confidence": 0}
+    d = evaluate_confluence("scalper", weak_style, weak_rcs, flat)
+    print(f"Test 4 (scalper 2/3 low conf): executable={d.is_executable} - {d.reason}")
+    assert not d.is_executable, "scalper conf below 0.65 must not execute"
 
     print()
     print("ALL TESTS PASS")

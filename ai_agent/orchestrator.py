@@ -318,13 +318,31 @@ class SettingsStore:
                 "ai_pm_used":      bundle.get("ai_pm_used", False),
                 # Opsi B: event-driven momentum trigger reason
                 "trigger_reason":  bundle.get("_trigger_reason", "scheduled"),
+                # Migration 012: RCS composite snapshot for home/signals RcsPanel
+                "rcs":             bundle.get("rcs"),
             }
+            # Defensive insert: drop unknown columns one-by-one if any migration
+            # is not yet applied. We try all → drop trigger_reason → drop rcs.
             try:
                 r = self._client.from_("signal_bundles").insert(payload).execute()
             except Exception as e:
-                # Graceful: if migration 005 not applied, retry without trigger_reason
-                if "trigger_reason" in str(e).lower() or "column" in str(e).lower():
+                msg = str(e).lower()
+                # Drop rcs column if migration 012 not yet applied
+                if "rcs" in msg and ("column" in msg or "schema" in msg or "does not exist" in msg):
+                    payload.pop("rcs", None)
+                    try:
+                        r = self._client.from_("signal_bundles").insert(payload).execute()
+                    except Exception as e2:
+                        msg2 = str(e2).lower()
+                        if "trigger_reason" in msg2 or "column" in msg2:
+                            payload.pop("trigger_reason", None)
+                            r = self._client.from_("signal_bundles").insert(payload).execute()
+                        else:
+                            raise
+                # Drop trigger_reason if migration 005 not applied
+                elif "trigger_reason" in msg or "column" in msg:
                     payload.pop("trigger_reason", None)
+                    payload.pop("rcs", None)
                     r = self._client.from_("signal_bundles").insert(payload).execute()
                 else:
                     raise

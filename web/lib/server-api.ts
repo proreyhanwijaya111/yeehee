@@ -222,7 +222,11 @@ function mapBundleRowToSignalBundle(row: Record<string, unknown>): SignalBundle 
     confidence:      Number(row.confidence ?? 0),
     // Opsi B: trigger_reason. May be null on legacy rows (pre-migration 005).
     trigger_reason:  row.trigger_reason ? String(row.trigger_reason) : undefined,
-    rcs:             null,   // populated by SSR page via getLatestRcsSignal() in parallel fetch
+    // Migration 012: RCS persisted directly on signal_bundles row. Fallback to
+    // null when column missing (migration not applied) or daemon hasn't pushed
+    // a cycle since the column was added — page.tsx then back-fills via
+    // getLatestRcsSignal('M15') from the rcs_signals table as second-best.
+    rcs:             (row.rcs as SignalBundle['rcs']) ?? null,
   }
 }
 

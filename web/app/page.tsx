@@ -20,7 +20,9 @@ export default async function HomePage() {
     getLatestRcsSignal('M15').catch(() => null),
   ])
   initialBundle = bundleResult
-  if (initialBundle && rcs) {
+  // RCS priority: 1) baked into signal_bundles row (migration 012), 2) fallback
+  // to latest rcs_signals row. If bundle already has rcs, keep it.
+  if (initialBundle && !initialBundle.rcs && rcs) {
     initialBundle.rcs = {
       rcs_score:      rcs.rcs_score,
       direction:      rcs.direction,
