@@ -356,11 +356,15 @@ try {
 
     # -- Step 5: write .env -----------------------------------------------------
     Write-Step "5/7 Tulis konfigurasi (.env)..."
+    # NOTE: TWELVE_DATA_API_KEY optional. Kalau di-set, daemon pakai real-time spot
+    # XAU/USD dari twelvedata.com. Kalau kosong, fallback ke yfinance close (15min delay).
+    # Daftar gratis di twelvedata.com (800 req/hari).
     $EnvLines = @(
         "SUPABASE_URL=$SupabaseUrl"
         "SUPABASE_ANON_KEY=$SupabaseAnonKey"
         "DAEMON_USER_ID=$UserId"
         "DAEMON_PORT=$Port"
+        "# TWELVE_DATA_API_KEY=  # optional: real-time XAU/USD spot, daftar gratis di twelvedata.com"
     )
     $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
     [System.IO.File]::WriteAllLines("$InstallDir\\.env", $EnvLines, $Utf8NoBom)

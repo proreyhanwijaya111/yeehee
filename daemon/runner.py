@@ -5,7 +5,7 @@ import time
 import traceback
 from datetime import datetime, timezone
 
-from data.price_fetcher import fetch_xau, fetch_intermarket_bundle
+from data.price_fetcher import fetch_xau, fetch_intermarket_bundle, fetch_realtime_xau_spot
 from data.calendar_fetcher import in_news_blackout, upcoming_high_impact
 from data.cot_fetcher import latest_cot_signal
 from features.technical import add_all
@@ -32,6 +32,10 @@ def run_once(store: SettingsStore, settings: dict, log=print) -> dict:
     df_1h  = add_all_smc(add_all(fetch_xau("1h")))
     df_4h  = add_all_smc(add_all(fetch_xau("4h")))
     df_1d  = add_all_smc(add_all(fetch_xau("1d")))
+
+    # Real-time spot price (Twelve Data, fallback to yfinance close)
+    realtime = fetch_realtime_xau_spot()
+    log(f"[runner] xau spot: ${realtime['price']} (src: {realtime['source']})")
 
     inter = intermarket_score(fetch_intermarket_bundle("1h"))
     cot   = latest_cot_signal()
@@ -87,9 +91,17 @@ def run_once(store: SettingsStore, settings: dict, log=print) -> dict:
         log("[runner] running rule-engine debate (LLM disabled)")
         debate_dict = _rule_debate_dict(df_1h, df_4h, inter, cot, sess, in_blk, blk_evt)
 
+    # xau_price: prefer real-time spot, fallback to last 1h close
+    xau_price_value = realtime.get("price")
+    if xau_price_value is None or xau_price_value <= 0:
+        xau_price_value = float(df_1h["close"].iloc[-1])
+        realtime["source"] = "yfinance_close"
+
     bundle = {
-        "timestamp":      now.isoformat(),
-        "xau_price":      round(float(df_1h["close"].iloc[-1]), 2),
+        "timestamp":         now.isoformat(),
+        "xau_price":         round(float(xau_price_value), 2),
+        "xau_price_source":  realtime["source"],
+        "xau_price_at_utc":  realtime["timestamp"],
         "regime":         regime_label,
         "session":        sess,
         "near_london_fix": fix,

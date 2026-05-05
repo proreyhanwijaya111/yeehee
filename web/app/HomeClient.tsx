@@ -6,6 +6,7 @@ import HeroCard from '@/components/HeroCard'
 import MacroSnapshot from '@/components/MacroSnapshot'
 import NewsAlert from '@/components/NewsAlert'
 import SignalCard from '@/components/SignalCard'
+import LiveTicker from '@/components/LiveTicker'
 import { ErrorState } from '@/components/LoadingSpinner'
 import { clearApiCache } from '@/lib/api'
 import type { SignalBundle } from '@/lib/types'
@@ -77,6 +78,9 @@ export default function HomeClient({ initialBundle, serverError }: Props) {
       </header>
 
       <div className="space-y-4">
+        {/* Live spot price ticker — independent dari daemon refresh */}
+        <LiveTicker />
+
         {data.in_news_blackout && <NewsAlert type="blackout" event={data.blackout_event} />}
         {!data.in_news_blackout && data.upcoming_events?.[0] && (
           <NewsAlert type="warning" event={data.upcoming_events[0]} />

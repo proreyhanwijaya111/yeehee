@@ -1,11 +1,24 @@
-"""Price fetcher (yfinance, free). Cache hasil di disk biar nggak hammer API."""
+"""Price fetcher.
+
+Two layers:
+1. **Historical OHLC** via yfinance (fallback chain GC=F -> XAUUSD=X -> GLD).
+   Used for indicator computation (EMA, RSI, ADX, BBands, etc).
+2. **Real-time spot** via Twelve Data API (free 800 req/day).
+   Used for `xau_price` snapshot in signal_bundle. Falls back to last
+   historical close if API key missing or rate-limited.
+
+Why split: yfinance gives 15-min delayed futures (GC=F), but trader's
+broker shows spot XAU/USD. Twelve Data gives the same spot price.
+"""
 from __future__ import annotations
+import os
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 import pandas as pd
+import requests
 import yfinance as yf
 
 from config.settings import DATA_CACHE, TICKERS
@@ -165,6 +178,64 @@ def latest_price(symbol: str = TICKERS["xau"]) -> Optional[float]:
         return float(df["close"].iloc[-1])
     except Exception:
         return None
+
+
+# ── Real-time spot XAU/USD via Twelve Data ─────────────────────────────────────
+
+def fetch_realtime_xau_spot() -> dict:
+    """Get real-time spot XAU/USD from Twelve Data.
+
+    Returns dict:
+        {
+            "price": 4550.32 (float) | None,
+            "timestamp": ISO string when fetched,
+            "source": "twelvedata" | "yfinance_fallback" | "none"
+        }
+
+    Free tier: 800 req/day = comfortable for daemon refresh every 5 min
+    (~288 req/day). Falls back to yfinance last close if no API key
+    or quota hit.
+    """
+    api_key = os.environ.get("TWELVE_DATA_API_KEY", "").strip()
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    if not api_key:
+        # No key set, fallback to yfinance last close
+        return _yfinance_fallback(now_iso, reason="no_twelvedata_key")
+
+    try:
+        r = requests.get(
+            "https://api.twelvedata.com/price",
+            params={"symbol": "XAU/USD", "apikey": api_key},
+            timeout=10,
+        )
+        if r.status_code != 200:
+            return _yfinance_fallback(now_iso, reason=f"twelvedata_http_{r.status_code}")
+        data = r.json()
+        # Twelve Data error response format: {"code": 401, "message": "..."}
+        if "price" not in data:
+            return _yfinance_fallback(now_iso, reason=f"twelvedata_error_{data.get('message', 'unknown')[:50]}")
+        price = float(data["price"])
+        if price <= 0:
+            return _yfinance_fallback(now_iso, reason="twelvedata_zero_price")
+        return {
+            "price":     price,
+            "timestamp": now_iso,
+            "source":    "twelvedata",
+        }
+    except (requests.RequestException, ValueError, KeyError) as e:
+        return _yfinance_fallback(now_iso, reason=f"twelvedata_exception_{type(e).__name__}")
+
+
+def _yfinance_fallback(now_iso: str, reason: str = "") -> dict:
+    """Fallback: use latest yfinance close (15-min delayed)."""
+    p = latest_price()
+    return {
+        "price":     p,
+        "timestamp": now_iso,
+        "source":    "yfinance_fallback",
+        "fallback_reason": reason,
+    }
 
 
 if __name__ == "__main__":
