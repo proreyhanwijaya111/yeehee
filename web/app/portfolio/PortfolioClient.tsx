@@ -1,13 +1,16 @@
 'use client'
+import { useState, useMemo } from 'react'
 import Link from 'next/link'
 import {
   ArrowLeft, Briefcase, Activity, Target, Zap, Waves,
-  CheckCircle2, Hourglass, type LucideIcon,
+  CheckCircle2, Hourglass, type LucideIcon, Clock,
 } from 'lucide-react'
 import {
   type ActiveTrade, type PortfolioStats, type TradeStatus,
 } from '@/lib/server-api'
 import { fmtPrice, cn } from '@/lib/utils'
+
+type StyleFilter = 'all' | 'scalper' | 'intraday' | 'swing'
 
 interface Props {
   openTrades:   ActiveTrade[]
@@ -37,6 +40,37 @@ const STATUS_TONE: Record<TradeStatus, 'open' | 'win' | 'loss' | 'neutral'> = {
 }
 
 export default function PortfolioClient({ openTrades, closedTrades, stats }: Props) {
+  const [filter, setFilter] = useState<StyleFilter>('all')
+
+  // Filter both lists by style
+  const filteredOpen   = filter === 'all' ? openTrades   : openTrades.filter(t => t.style === filter)
+  const filteredClosed = filter === 'all' ? closedTrades : closedTrades.filter(t => t.style === filter)
+
+  // Per-style breakdown stats
+  const breakdown = useMemo(() => {
+    const result: Record<string, { wins: number; losses: number; total_r: number; n: number; avg_duration_ms: number }> = {
+      scalper:  { wins: 0, losses: 0, total_r: 0, n: 0, avg_duration_ms: 0 },
+      intraday: { wins: 0, losses: 0, total_r: 0, n: 0, avg_duration_ms: 0 },
+      swing:    { wins: 0, losses: 0, total_r: 0, n: 0, avg_duration_ms: 0 },
+    }
+    for (const t of closedTrades) {
+      const b = result[t.style]
+      if (!b) continue
+      b.n++
+      const r = t.pnl_r ?? 0
+      b.total_r += r
+      if (r > 0) b.wins++
+      else b.losses++
+      if (t.opened_at && t.closed_at) {
+        b.avg_duration_ms += new Date(t.closed_at).getTime() - new Date(t.opened_at).getTime()
+      }
+    }
+    for (const k of Object.keys(result)) {
+      if (result[k].n > 0) result[k].avg_duration_ms /= result[k].n
+    }
+    return result
+  }, [closedTrades])
+
   return (
     <main className="max-w-lg mx-auto px-4 pt-4 pb-2 animate-fade-in">
       <header className="flex items-center gap-2 mb-4">
@@ -55,30 +89,101 @@ export default function PortfolioClient({ openTrades, closedTrades, stats }: Pro
       <div className="space-y-5">
         {stats && stats.closed_count > 0 ? <StatsCard stats={stats} /> : <EmptyStats />}
 
-        {openTrades.length > 0 ? (
-          <Group title={`Active trades (${openTrades.length})`}>
-            {openTrades.map(t => <TradeRow key={t.id} trade={t} live />)}
+        {/* Per-style breakdown */}
+        {closedTrades.length > 0 && <BreakdownCard breakdown={breakdown} />}
+
+        {/* Style filter pills */}
+        <div>
+          <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-widest mb-1.5 px-2">
+            Filter kategori
+          </p>
+          <div className="grid grid-cols-4 gap-px bg-slate-800/80 rounded-xl overflow-hidden p-px">
+            {(['all', 'scalper', 'intraday', 'swing'] as StyleFilter[]).map(s => (
+              <button
+                key={s}
+                onClick={() => setFilter(s)}
+                className={cn(
+                  'py-2 px-2 text-[11px] font-semibold transition-colors rounded-[10px] capitalize',
+                  filter === s ? 'bg-sky-900/40 text-sky-100' : 'bg-slate-900/40 text-slate-400',
+                )}
+              >
+                {s === 'all' ? 'Semua' : s}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {filteredOpen.length > 0 ? (
+          <Group title={`Active trades (${filteredOpen.length})`}>
+            {filteredOpen.map(t => <TradeRow key={t.id} trade={t} live />)}
           </Group>
         ) : (
           <Group title="Active trades">
             <div className="px-3.5 py-6 text-center">
               <Hourglass size={24} className="text-slate-500 mx-auto mb-2" />
-              <p className="text-xs text-slate-400 font-medium">Belum ada active trade</p>
+              <p className="text-xs text-slate-400 font-medium">
+                {filter === 'all' ? 'Belum ada active trade' : `Belum ada active trade ${filter}`}
+              </p>
               <p className="text-[10px] text-slate-500 leading-relaxed mt-1 max-w-xs mx-auto">
-                Daemon akan auto-open trade saat signal LONG/SHORT keluar dengan confidence ≥ 0.5.
-                Tunggu next cycle (5 menit).
+                Daemon auto-open saat signal LONG/SHORT confidence ≥ 0.5.
               </p>
             </div>
           </Group>
         )}
 
-        {closedTrades.length > 0 && (
-          <Group title={`History (${closedTrades.length})`}>
-            {closedTrades.slice(0, 30).map(t => <TradeRow key={t.id} trade={t} />)}
+        {filteredClosed.length > 0 && (
+          <Group title={`History (${filteredClosed.length})`}>
+            {filteredClosed.slice(0, 50).map(t => <TradeRow key={t.id} trade={t} />)}
           </Group>
         )}
       </div>
     </main>
+  )
+}
+
+// Per-style breakdown table
+function BreakdownCard({ breakdown }: { breakdown: Record<string, { wins: number; losses: number; total_r: number; n: number; avg_duration_ms: number }> }) {
+  return (
+    <div>
+      <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-widest mb-1.5 px-2">
+        Per kategori
+      </p>
+      <div className="bg-slate-800/40 rounded-2xl border border-slate-800 overflow-hidden divide-y divide-slate-800/80">
+        {(['scalper', 'intraday', 'swing'] as const).map(style => {
+          const b = breakdown[style]
+          const Icon = STYLE_ICON[style]
+          const winrate = b.n > 0 ? (b.wins / b.n) * 100 : 0
+          const totalR = b.total_r
+          const avgDur = b.avg_duration_ms
+          return (
+            <div key={style} className="px-3.5 py-3 flex items-center gap-3">
+              <div className="w-7 h-7 rounded-lg bg-slate-900/50 border border-slate-700/50 flex items-center justify-center shrink-0">
+                <Icon size={13} className="text-slate-400" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <p className="text-sm font-medium text-slate-100 capitalize">{style}</p>
+                  <span className="text-[10px] text-slate-500">
+                    {b.n === 0 ? 'no trades' : `${b.n} trade · avg ${formatDuration(avgDur)}`}
+                  </span>
+                </div>
+                {b.n > 0 && (
+                  <div className="flex items-center gap-3 text-[10px] text-slate-500 mt-0.5 font-mono">
+                    <span>{b.wins}W / {b.losses}L</span>
+                    <span className={winrate >= 50 ? 'text-emerald-400' : 'text-rose-400'}>
+                      {winrate.toFixed(0)}% WR
+                    </span>
+                    <span className={totalR >= 0 ? 'text-emerald-400' : 'text-rose-400'}>
+                      {totalR >= 0 ? '+' : ''}{totalR.toFixed(2)} R
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
   )
 }
 
@@ -140,6 +245,11 @@ function TradeRow({ trade, live }: { trade: ActiveTrade; live?: boolean }) {
                       'bg-slate-700/30 text-slate-300 border-slate-700/40'
   const pnlR = trade.pnl_r ?? 0
 
+  // Duration: how long trade was/has been open
+  const opened = new Date(trade.opened_at).getTime()
+  const closed = trade.closed_at ? new Date(trade.closed_at).getTime() : Date.now()
+  const durationMs = closed - opened
+
   return (
     <div className="px-3.5 py-3">
       <div className="flex items-center gap-2.5">
@@ -147,14 +257,16 @@ function TradeRow({ trade, live }: { trade: ActiveTrade; live?: boolean }) {
           <Icon size={13} className="text-slate-400" />
         </div>
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1.5 flex-wrap">
             <span className={cn('text-sm font-bold', sideColor)}>
               {sideArrow} {trade.side}
             </span>
-            <span className="text-[10px] text-slate-500 uppercase">{trade.style}</span>
+            <span className="text-[9px] uppercase tracking-wide font-semibold text-slate-400 bg-slate-800/60 px-1.5 py-0.5 rounded">
+              {trade.style}
+            </span>
             {trade.confidence !== null && (
               <span className="text-[10px] text-slate-500 font-mono">
-                {(trade.confidence * 100).toFixed(0)}%
+                conf {(trade.confidence * 100).toFixed(0)}%
               </span>
             )}
           </div>
@@ -178,21 +290,52 @@ function TradeRow({ trade, live }: { trade: ActiveTrade; live?: boolean }) {
 
       {live && trade.high_after_open !== null && trade.low_after_open !== null && (
         <div className="mt-2 flex items-center gap-3 text-[10px] text-slate-500 font-mono">
-          <span>High: {fmtPrice(trade.high_after_open)}</span>
-          <span>Low: {fmtPrice(trade.low_after_open)}</span>
+          <span>H: {fmtPrice(trade.high_after_open)}</span>
+          <span>L: {fmtPrice(trade.low_after_open)}</span>
           <span className="ml-auto">
-            {trade.hit_tp1 && <CheckCircle2 size={11} className="inline text-emerald-400 mr-0.5" />}
-            {trade.hit_tp1 ? 'TP1 ✓' : ''}
-            {trade.hit_tp2 && ' TP2 ✓'}
+            {trade.hit_tp1 && <span className="text-emerald-400">TP1 ✓ </span>}
+            {trade.hit_tp2 && <span className="text-emerald-400">TP2 ✓</span>}
           </span>
         </div>
       )}
 
-      <p className="text-[9px] text-slate-600 mt-1 font-mono">
-        Opened {timeAgo(trade.opened_at)} · expires {timeAgo(trade.expiry_at)}
-      </p>
+      {/* Duration row — explicit, readable */}
+      <div className="mt-1.5 flex items-center gap-2 text-[10px] text-slate-500">
+        <Clock size={10} className="shrink-0" />
+        <span className="font-mono">
+          {live
+            ? <>open {formatDuration(durationMs)} · expires in {timeAgoFuture(trade.expiry_at)}</>
+            : <>held {formatDuration(durationMs)} · {timeAgo(trade.opened_at)} → {timeAgo(trade.closed_at ?? '')}</>
+          }
+        </span>
+      </div>
     </div>
   )
+}
+
+// Format duration in human-readable form: "2h 15m" or "3d 5h" or "45m"
+function formatDuration(ms: number): string {
+  if (ms < 0 || !Number.isFinite(ms)) return '–'
+  const sec = Math.floor(ms / 1000)
+  const m = Math.floor(sec / 60)
+  if (m < 1) return `${sec}s`
+  if (m < 60) return `${m}m`
+  const h = Math.floor(m / 60)
+  const remM = m % 60
+  if (h < 24) return remM > 0 ? `${h}h ${remM}m` : `${h}h`
+  const d = Math.floor(h / 24)
+  const remH = h % 24
+  return remH > 0 ? `${d}d ${remH}h` : `${d}d`
+}
+
+function timeAgoFuture(iso: string): string {
+  try {
+    const diff = new Date(iso).getTime() - Date.now()
+    if (diff < 0) return 'expired'
+    return formatDuration(diff)
+  } catch {
+    return '–'
+  }
 }
 
 function Cell({ label, value, sub, tone }: {
