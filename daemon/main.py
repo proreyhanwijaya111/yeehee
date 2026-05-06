@@ -103,6 +103,12 @@ def signal_loop(store: SettingsStore, log=print):
         try:
             settings_local = store.app_settings()
             bundle = run_once(store, settings_local, log=log, trigger_reason=reason)
+            # 2026-05-06: run_once may return _skip=True when xau_price is
+            # corrupt (GLD ETF fallback). Don't mark eval, so next poll retries
+            # immediately instead of waiting full refresh interval.
+            if bundle.get("_skip"):
+                log(f"[signal] cycle skipped: {bundle.get('_reason', 'unknown')}")
+                return
             last_signal_at = bundle.get("timestamp")
             watcher.mark_full_eval()
             push_heartbeat(store, last_signal_at=last_signal_at, error=None,

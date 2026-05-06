@@ -17,12 +17,15 @@ interface Props {
 }
 
 export default function SignalsClient({ initialBundle, serverError, openTrades = [] }: Props) {
+  // 60s SWR refresh (was 5min) — daemon push cycles every ~3min, so this
+  // catches new bundles within 1-2x cycle. Keeps signal countdown / EXPIRED
+  // state aligned with actual daemon output.
   const { data, error, mutate } = useSWR(
     'signals',
     () => getSignals('signals'),
     {
       fallbackData:      initialBundle ?? undefined,
-      refreshInterval:   5 * 60 * 1000,
+      refreshInterval:   60 * 1000,
       revalidateOnFocus: false,
       revalidateOnMount: !initialBundle,
     },

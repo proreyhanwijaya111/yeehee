@@ -26,15 +26,16 @@ interface Props {
 export default function HomeClient({
   initialBundle, serverError, openTrades = [], closedTrades = [], portfolioStats = null,
 }: Props) {
-  // SWR with fallbackData = no loading flash. Hydrates from server-rendered HTML,
-  // then refreshes in background every 5 min. revalidateOnFocus disabled to
-  // avoid hammering Supabase saat tab switch.
+  // SWR with fallbackData = no loading flash. Hydrates from server-rendered HTML.
+  // 2026-05-06: tightened refresh from 5min -> 60s. Daemon pushes ~3min cycles,
+  // so 60s catches new bundles within 1-2x cycle. Old 5min interval meant
+  // "5m lalu" stayed visible for 8+ minutes after a new bundle landed in DB.
   const { data, error, mutate } = useSWR(
     'signals',
     () => getSignals('signals'),
     {
       fallbackData:        initialBundle ?? undefined,
-      refreshInterval:     5 * 60 * 1000,
+      refreshInterval:     60 * 1000,
       revalidateOnFocus:   false,
       revalidateOnMount:   !initialBundle,  // only fetch on mount if no SSR data
     },
@@ -98,7 +99,10 @@ export default function HomeClient({
           <NewsAlert type="warning" event={data.upcoming_events[0]} />
         )}
 
-        <HeroCard bundle={data} />
+        <HeroCard
+          bundle={data}
+          isExecuted={openTrades.some(t => t.status === 'OPEN')}
+        />
 
         <div>
           <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-widest mb-1.5 px-2">

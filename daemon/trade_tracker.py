@@ -60,15 +60,30 @@ DEFAULT_KELLY_FRACTION = 0.25
 # Floor risk_pct (don't size below this even if Kelly says zero — it's still a paper trade).
 RISK_PCT_FLOOR = 0.001  # 0.1% minimum
 
-# IMPROVEMENT #4: confidence-adjusted sizing.
-# Confidence 0.50 = 50% of profile cap. Confidence 0.95 = 100% of profile cap.
-# Linear interpolation between MIN_CONFIDENCE and 1.0.
+# Sanity range for gold spot prices. Used to reject GLD ETF fallback (~$430)
+# leaking through the yfinance fallback chain (FALLBACK_TICKERS["xau"]
+# = GC=F -> GLD -> IAU). Gold has been $1500-5000 historically; we use a
+# wide $1000-10000 window to future-proof.
+GOLD_PRICE_MIN = 1000.0
+GOLD_PRICE_MAX = 10000.0
+
+def _is_gold_price(p) -> bool:
+    """True if `p` is in realistic gold spot range (rejects GLD/IAU fallback)."""
+    try:
+        v = float(p)
+        return GOLD_PRICE_MIN < v < GOLD_PRICE_MAX
+    except (TypeError, ValueError):
+        return False
+
+
+# 2026-05-06: confidence multiplier disabled per user explicit request
+# ("risk trade 1%"). Weak signals already filtered upstream by MIN_CONFIDENCE
+# gate (0.50). Risk per trade is now flat = profile_cap; Kelly still active
+# when sufficient history (>=KELLY_MIN_CLOSED) but no longer scaled by
+# per-signal confidence.
 def _confidence_multiplier(confidence: float) -> float:
-    if confidence <= MIN_CONFIDENCE:
-        return 0.5
-    if confidence >= 0.95:
-        return 1.0
-    return 0.5 + 0.5 * (confidence - MIN_CONFIDENCE) / (0.95 - MIN_CONFIDENCE)
+    """Deprecated: returns 1.0 unconditionally. Kept for back-compat."""
+    return 1.0
 
 
 def compute_risk_sizing(
@@ -490,20 +505,25 @@ def _evaluate_trade(trade: dict, df_5m: pd.DataFrame, now: datetime) -> Optional
 
     # Augment high_after_open / low_after_open with the LATEST close (in case
     # the stored values are stale and the latest close is more extreme).
+    # GUARD: skip GLD/IAU fallback bars (~$432 ETF price) — they pollute
+    # high/low tracking permanently. See _is_gold_price + GOLD_PRICE_MIN/MAX.
     if df_5m is not None and len(df_5m) > 0:
         latest_close = float(df_5m.iloc[-1]["close"])
         latest_high  = float(df_5m.iloc[-1]["high"]) if "high" in df_5m.columns else latest_close
         latest_low   = float(df_5m.iloc[-1]["low"])  if "low"  in df_5m.columns else latest_close
-        upd.high_after_open = max(upd.high_after_open or latest_high, latest_high, latest_close)
-        upd.low_after_open  = min(upd.low_after_open  or latest_low,  latest_low,  latest_close)
-        # Also flag TP hits if latest bar is at or past TP levels (was missed
-        # if last_check_at > bar.timestamp due to clock skew)
-        if side == "LONG":
-            if tp1 > 0 and upd.high_after_open >= tp1: upd.hit_tp1 = True
-            if tp2 > 0 and upd.high_after_open >= tp2: upd.hit_tp2 = True
+        if not (_is_gold_price(latest_close) and _is_gold_price(latest_high) and _is_gold_price(latest_low)):
+            log(f"[tracker] WARN df_5m latest bar prices unrealistic (close=${latest_close:.2f} high=${latest_high:.2f} low=${latest_low:.2f}) -- likely GLD fallback; skip update for trade {trade.get('id', '')[:8]}")
         else:
-            if tp1 > 0 and upd.low_after_open  <= tp1: upd.hit_tp1 = True
-            if tp2 > 0 and upd.low_after_open  <= tp2: upd.hit_tp2 = True
+            upd.high_after_open = max(upd.high_after_open or latest_high, latest_high, latest_close)
+            upd.low_after_open  = min(upd.low_after_open  or latest_low,  latest_low,  latest_close)
+            # Also flag TP hits if latest bar is at or past TP levels (was missed
+            # if last_check_at > bar.timestamp due to clock skew)
+            if side == "LONG":
+                if tp1 > 0 and upd.high_after_open >= tp1: upd.hit_tp1 = True
+                if tp2 > 0 and upd.high_after_open >= tp2: upd.hit_tp2 = True
+            else:
+                if tp1 > 0 and upd.low_after_open  <= tp1: upd.hit_tp1 = True
+                if tp2 > 0 and upd.low_after_open  <= tp2: upd.hit_tp2 = True
 
     # Apply trailing SL based on (possibly augmented) highest excursion.
     if side == "LONG":
@@ -520,6 +540,9 @@ def _evaluate_trade(trade: dict, df_5m: pd.DataFrame, now: datetime) -> Optional
 
     for ts, row in candles.iterrows():
         h = float(row["high"]); l = float(row["low"])
+        # GUARD: skip GLD/IAU fallback bars to prevent low pollution like $432.36
+        if not (_is_gold_price(h) and _is_gold_price(l)):
+            continue
         upd.high_after_open = max(upd.high_after_open or h, h)
         upd.low_after_open  = min(upd.low_after_open or l, l)
 

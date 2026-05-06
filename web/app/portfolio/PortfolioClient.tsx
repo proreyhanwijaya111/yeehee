@@ -83,11 +83,31 @@ const STATUS_TONE: Record<TradeStatus, 'open' | 'win' | 'loss' | 'neutral'> = {
 export default function PortfolioClient({ openTrades, closedTrades, stats, xauPrice }: Props) {
   const [filter, setFilter] = useState<StyleFilter>('all')
   const [range,  setRange]  = useState<RangeFilter>('recent')
+  // Optimistic close: trade IDs the user just closed locally. Hide immediately
+  // even before server-side revalidate (30s ISR cache) catches up. Cleared on
+  // route refresh when fresh data lands.
+  const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set())
   const router = useRouter()
 
-  // Filter both lists by style
-  const filteredOpen      = filter === 'all' ? openTrades   : openTrades.filter(t => t.style === filter)
+  // Filter both lists by style + drop optimistically-closed
+  const filteredOpen = (filter === 'all' ? openTrades : openTrades.filter(t => t.style === filter))
+    .filter(t => !hiddenIds.has(t.id))
   const filteredClosedAll = filter === 'all' ? closedTrades : closedTrades.filter(t => t.style === filter)
+
+  const handleClosedOptimistically = (tradeId: string) => {
+    setHiddenIds(prev => {
+      const next = new Set(prev)
+      next.add(tradeId)
+      return next
+    })
+    // After router refresh lands (server returns fresh data without this trade
+    // in OPEN list), the hidden set becomes stale-but-harmless. Reset on
+    // openTrades change to keep memory clean.
+    router.refresh()
+  }
+
+  // Reset optimistic-closed set when openTrades prop changes (server refresh complete)
+  useEffect(() => { setHiddenIds(new Set()) }, [openTrades])
 
   // Apply range filter to closed trades. Recent = last 5, others time-based.
   const filteredClosed = useMemo(() => {
@@ -209,7 +229,14 @@ export default function PortfolioClient({ openTrades, closedTrades, stats, xauPr
         {filteredOpen.length > 0 ? (
           <Group title={`Active trades (${filteredOpen.length})`}>
             {filteredOpen.map(t => (
-              <TradeRow key={t.id} trade={t} live xauPrice={xauPrice} onRefresh={() => router.refresh()} />
+              <TradeRow
+                key={t.id}
+                trade={t}
+                live
+                xauPrice={xauPrice}
+                onRefresh={() => router.refresh()}
+                onClosedOptimistically={handleClosedOptimistically}
+              />
             ))}
           </Group>
         ) : (
@@ -392,8 +419,10 @@ function EmptyStats() {
   )
 }
 
-function TradeRow({ trade, live, xauPrice, onRefresh }: {
-  trade: ActiveTrade; live?: boolean; xauPrice?: number | null; onRefresh?: () => void
+function TradeRow({ trade, live, xauPrice, onRefresh, onClosedOptimistically }: {
+  trade: ActiveTrade; live?: boolean; xauPrice?: number | null;
+  onRefresh?: () => void;
+  onClosedOptimistically?: (tradeId: string) => void;
 }) {
   // Default-expanded for OPEN trades (user wants live tracking visible),
   // collapsed for closed trades (history scan-friendly, tap to expand chart).
@@ -413,15 +442,34 @@ function TradeRow({ trade, live, xauPrice, onRefresh }: {
       const j = await r.json()
       if (!r.ok || !j.ok) {
         alert(`Gagal close: ${j.error || r.statusText}`)
-      } else {
-        if (onRefresh) onRefresh()
+        return
       }
+      // Success: optimistically hide this row from active list immediately.
+      // Server-side ISR cache (30s) lags fresh data; router.refresh() in parent
+      // resyncs eventually. Without this, user sees the trade still as OPEN
+      // for up to 30s, thinks the close button is broken.
+      if (onClosedOptimistically) onClosedOptimistically(trade.id)
+      else if (onRefresh) onRefresh()
     } catch (err) {
       alert(`Error: ${String(err)}`)
     } finally {
       setClosing(false)
     }
   }
+
+  // Trailing SL state badge: gives user context that SL above entry on LONG
+  // (or below on SHORT) is INTENTIONAL profit-locking, not a bug.
+  // Shown only on live trades where sl_moved_at exists.
+  const trailingBadge = (() => {
+    if (!live || !trade.sl_moved_at || trade.original_sl == null) return null
+    const sl = Number(trade.sl)
+    const entry = Number(trade.entry)
+    const tp1 = trade.tp1 != null ? Number(trade.tp1) : null
+    if (Math.abs(sl - entry) < 0.01) return { label: 'BEP', tone: 'amber' }
+    if (tp1 != null && Math.abs(sl - tp1) < 0.01) return { label: 'TP1 LOCK', tone: 'emerald' }
+    // Trailing — sl moved past original toward profit
+    return { label: 'TRAILING', tone: 'sky' }
+  })()
   const Icon = STYLE_ICON[trade.style] ?? Target
   const tone = STATUS_TONE[trade.status]
   const sideColor = trade.side === 'LONG' ? 'text-emerald-300' : 'text-rose-300'
@@ -461,8 +509,18 @@ function TradeRow({ trade, live, xauPrice, onRefresh }: {
               </span>
             )}
           </div>
-          <p className="text-[11px] text-slate-500 font-mono tabular-nums mt-0.5">
-            {fmtPrice(trade.entry)} → SL {fmtPrice(trade.sl)} / TP1 {trade.tp1 ? fmtPrice(trade.tp1) : '–'}
+          <p className="text-[11px] text-slate-500 font-mono tabular-nums mt-0.5 flex items-center gap-1.5 flex-wrap">
+            <span>{fmtPrice(trade.entry)} → SL {fmtPrice(trade.sl)} / TP1 {trade.tp1 ? fmtPrice(trade.tp1) : '–'}</span>
+            {trailingBadge && (
+              <span className={cn(
+                'text-[8px] font-bold uppercase tracking-wide px-1 py-px rounded border leading-none',
+                trailingBadge.tone === 'emerald' ? 'bg-emerald-700/30 text-emerald-200 border-emerald-700/40' :
+                trailingBadge.tone === 'amber'   ? 'bg-amber-700/30 text-amber-200 border-amber-700/40' :
+                                                    'bg-sky-700/30 text-sky-200 border-sky-700/40',
+              )} title={`SL moved from ${fmtPrice(Number(trade.original_sl))} to ${fmtPrice(trade.sl)} (lock profit)`}>
+                🔒 {trailingBadge.label}
+              </span>
+            )}
           </p>
         </div>
         <div className="text-right shrink-0">

@@ -6,7 +6,7 @@ import time
 import traceback
 from datetime import datetime, timezone
 
-from data.price_fetcher import fetch_xau, fetch_intermarket_bundle, fetch_realtime_xau_spot, fetch_yahoo_spot, fetch_mt5_spot
+from data.price_fetcher import fetch_xau, fetch_intermarket_bundle, fetch_realtime_xau_spot, fetch_yahoo_spot, fetch_stooq_spot, fetch_mt5_spot
 from daemon.trade_tracker import open_trade_if_eligible, update_open_trades
 from daemon.heartbeat import get_worker_id
 from data.calendar_fetcher import in_news_blackout, upcoming_high_impact
@@ -142,19 +142,31 @@ def run_once(store: SettingsStore, settings: dict, log=print, trigger_reason: st
                     _save_premium_gap(gap)
             log(f"[runner] entry-base spot=${v:.2f} (twelvedata real-time)")
 
-    # Tier 2: Yahoo HTTPS XAUUSD=X spot (no API key, no quota, matches broker
-    # ±$0.50 typically). yfinance Python lib 404s on this symbol but the
-    # underlying /v8/finance/chart endpoint works fine.
+    # Tier 2: Yahoo HTTPS XAUUSD=X spot. Free, no quota.
+    # 2026-05-06: Yahoo started returning 404 "delisted" for this symbol.
+    # Kept here as legacy in case Yahoo restores; stooq below is preferred Tier 2.
     if spot_for_entry is None:
         yahoo_spot = fetch_yahoo_spot()
         if yahoo_spot and yahoo_spot > 0:
             spot_for_entry = yahoo_spot
-            # Also calibrate adaptive premium from this gap
             if df_close_now is not None:
                 gap = df_close_now - yahoo_spot
                 if 1.0 < gap < 30.0:
                     _save_premium_gap(gap)
             log(f"[runner] entry-base spot=${yahoo_spot:.2f} (yahoo XAUUSD=X HTTPS)")
+
+    # Tier 2.5: stooq.com CSV — replaces dead Yahoo XAUUSD=X. Free, no key,
+    # no quota, public source. LBMA-ish spot $1-2 dari broker MT5 mid.
+    # Discovery 2026-05-06 by recalibrate_gap.py session.
+    if spot_for_entry is None:
+        stooq_spot = fetch_stooq_spot()
+        if stooq_spot and stooq_spot > 0:
+            spot_for_entry = stooq_spot
+            if df_close_now is not None:
+                gap = df_close_now - stooq_spot
+                if 1.0 < gap < 30.0:
+                    _save_premium_gap(gap)
+            log(f"[runner] entry-base spot=${stooq_spot:.2f} (stooq XAU/USD)")
 
     if spot_for_entry is None and df_close_now is not None:
         gap = _load_premium_gap()
@@ -257,6 +269,21 @@ def run_once(store: SettingsStore, settings: dict, log=print, trigger_reason: st
         if xau_price_value is None or xau_price_value <= 0:
             xau_price_value = float(df_1h["close"].iloc[-1])
             realtime["source"] = "yfinance_close"
+
+    # Final sanity: reject corrupt xau_price (GLD ETF ~$432 leak via fallback
+    # chain). Without this guard, downstream consumers get $418-style bundles
+    # that crash UI display + skew metrics. Better to skip this cycle than
+    # publish garbage. price_fetcher._fetch_with_fallback now also rejects
+    # GLD at fetch level, but defense-in-depth keeps this final check.
+    if not (1000 < float(xau_price_value or 0) < 10000):
+        log(f"[runner] ABORT cycle: xau_price={xau_price_value!r} unrealistic "
+            f"(likely GLD ETF fallback). Skipping bundle push -- next cycle retries.")
+        return {
+            "_skip": True,
+            "_reason": f"invalid_xau_price={xau_price_value!r}",
+            "timestamp": now.isoformat(),
+            "_elapsed_s": round(time.time() - started, 1),
+        }
 
     bundle = {
         "timestamp":         now.isoformat(),

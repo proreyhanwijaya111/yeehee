@@ -143,8 +143,22 @@ def fetch_ohlcv(
     return df
 
 
+# Sanity ranges per asset key. Used in _fetch_with_fallback to reject ETF
+# fallbacks that have wrong price scale (e.g. GLD ~$430 vs gold spot ~$4700).
+# Without this, GC=F rate-limit -> GLD fallback would silently pollute every
+# downstream consumer (active_trades.low_after_open hit $432.36 in prod).
+SCALE_RANGE = {
+    "xau": (1000.0, 10000.0),   # gold spot: $1500-5000 historical; wide window
+    "silver": (10.0, 200.0),    # silver: $15-50 historical
+}
+
 def _fetch_with_fallback(asset_key: str, interval: str, period: Optional[str] = None) -> pd.DataFrame:
-    """Try primary ticker, fall back to alternatives if Yahoo returns empty / rate-limits."""
+    """Try primary ticker, fall back to alternatives if Yahoo returns empty / rate-limits.
+
+    Scale validation: for assets in SCALE_RANGE, the latest close must fit the
+    expected price band — otherwise the data is from a wrong-scale fallback
+    (e.g. GLD ETF subbing for GC=F gold futures). Reject and try next ticker.
+    """
     candidates = FALLBACK_TICKERS.get(asset_key, [])
     if not candidates:
         # Unknown key, try config TICKERS direct
@@ -154,10 +168,24 @@ def _fetch_with_fallback(asset_key: str, interval: str, period: Optional[str] = 
         raise RuntimeError(f"no ticker config for {asset_key}")
 
     last_error: Exception | None = None
+    scale_lo, scale_hi = SCALE_RANGE.get(asset_key, (None, None))
+
     for i, sym in enumerate(candidates):
         try:
             df = fetch_ohlcv(sym, interval, period, use_cache=(i == 0))
             if df is not None and not df.empty:
+                # Scale validation: gold from GLD ($432) is 10x off from gold
+                # from GC=F ($4700). Multiplying doesn't fix it (basis varies),
+                # so reject wrong-scale fallbacks entirely.
+                if scale_lo is not None:
+                    last_close = float(df["close"].iloc[-1])
+                    if not (scale_lo < last_close < scale_hi):
+                        last_error = RuntimeError(
+                            f"{sym} returned out-of-range close=${last_close:.2f} "
+                            f"(expected {asset_key} in [{scale_lo}, {scale_hi}])"
+                        )
+                        # Try next candidate instead of returning bad data
+                        continue
                 if i > 0:
                     print(f"[fallback] {asset_key} pakai {sym} (primary {candidates[0]} gagal)")
                 return df
@@ -219,11 +247,51 @@ def fetch_mt5_spot() -> Optional[float]:
     return None
 
 
+# ── Real-time spot XAU/USD via stooq.com CSV (Tier 2 PERMANENT) ────────────────
+# Discovered 2026-05-06: yahoo XAUUSD=X 404s ("delisted at endpoint"), twelvedata
+# free tier 800/day quota burns out fast under daemon polling. stooq.com is a
+# free public source with no API key, no quota, no auth -- matches LBMA spot
+# within $1-2 of broker MT5 mid. Tier 2 fallback when twelvedata fails.
+
+def fetch_stooq_spot() -> Optional[float]:
+    """XAU/USD spot via stooq.com CSV. No API key, no quota.
+
+    Returns mid LBMA-ish quote, typically within $1-2 of broker bid/ask.
+    None on any failure (network, parse, scale-out-of-range).
+    """
+    try:
+        r = requests.get(
+            "https://stooq.com/q/l/?s=xauusd&i=d&f=sd2t2ohlcv&h&e=csv",
+            timeout=8,
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
+        if r.status_code != 200:
+            return None
+        lines = r.text.strip().split("\n")
+        if len(lines) < 2:
+            return None
+        parts = lines[1].split(",")
+        # Columns per &f=sd2t2ohlcv: Symbol,Date,Time,Open,High,Low,Close,Volume
+        if len(parts) < 7:
+            return None
+        v = float(parts[6])
+        # Gold spot sanity: rejects parser bugs / ETF substitutes
+        if 1000 < v < 10000:
+            return v
+    except Exception:
+        return None
+    return None
+
+
 # ── Real-time spot XAU/USD via Yahoo HTTPS (XAUUSD=X) ─────────────────────────
 # Uses /v8/finance/chart endpoint directly. yfinance Python lib 404s on
 # XAUUSD=X but the underlying HTTPS endpoint serves it fine. This matches
 # what TradingView/OANDA quote for retail spot — typically within $0.50 of
 # Exness/IC Markets/etc broker bid/ask.
+#
+# 2026-05-06: Yahoo started returning 404 "delisted" for XAUUSD=X. Kept as
+# Tier 2 (legacy) but stooq is preferred Tier 2 now. If Yahoo recovers later,
+# this fetcher will resume working without code change.
 
 def fetch_yahoo_spot() -> Optional[float]:
     """Fetch current XAU/USD spot price via Yahoo HTTPS chart endpoint.

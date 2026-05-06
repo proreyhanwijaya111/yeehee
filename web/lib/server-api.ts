@@ -119,6 +119,10 @@ export interface ActiveTrade {
   prior_winrate?:   number | null   // historical win rate snapshot at open
   prior_avg_win_r?: number | null
   prior_n_closed?:  number | null   // sample size used for Kelly
+  // Migration 013: stepped trailing SL. `sl` is current (may move toward TP);
+  // `original_sl` is the immutable risk anchor used for pnl_r normalization.
+  original_sl?:     number | null
+  sl_moved_at?:     string | null   // ISO ts when sl was first moved past original
 }
 
 export async function getActiveTrades(opts?: { status?: TradeStatus | 'all'; limit?: number }) {
