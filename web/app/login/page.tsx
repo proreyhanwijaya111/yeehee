@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { TrendingUp, Lock, User, Loader2, Eye, EyeOff } from 'lucide-react'
 
@@ -11,8 +11,28 @@ import { TrendingUp, Lock, User, Loader2, Eye, EyeOff } from 'lucide-react'
  *
  * Initial admin: rey666 / tested1234 (hardcoded in env or hashed in DB).
  * Multi-user signup deferred to phase 2 with Supabase Auth.
+ *
+ * Next.js 14 requires useSearchParams() consumers to be wrapped in Suspense
+ * (or the page declared dynamic). We use Suspense so the static shell can
+ * still pre-render — only the form deserialises params client-side.
  */
 export default function LoginPage() {
+  return (
+    <Suspense fallback={<LoginFallback />}>
+      <LoginForm />
+    </Suspense>
+  )
+}
+
+function LoginFallback() {
+  return (
+    <main className="min-h-screen flex items-center justify-center bg-slate-950">
+      <Loader2 size={28} className="animate-spin text-amber-500" />
+    </main>
+  )
+}
+
+function LoginForm() {
   const router = useRouter()
   const params = useSearchParams()
   const next   = params.get('next') || '/'
