@@ -86,6 +86,8 @@ export interface NewsEvent {
 
 export interface SignalBundle {
   xau_price:        number
+  xau_price_source?: string   // 'twelvedata' | 'yfinance_fallback' | etc — for UX diagnostic
+  xau_price_at_utc?: string
   timestamp:        string
   regime:           string
   session:          string

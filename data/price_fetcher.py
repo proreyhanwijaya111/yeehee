@@ -23,10 +23,17 @@ import yfinance as yf
 
 from config.settings import DATA_CACHE, TICKERS
 
-# Fallback tickers per asset — kalau primary gagal (GC=F sering ke-block / delisted-state), coba alternatif.
-# Order matters: paling akurat dulu.
+# Fallback tickers per asset — kalau primary gagal, coba alternatif.
+# Order CRITICAL: paling akurat ke broker spot quote dulu.
+#
+# XAU FIX (2026-05-06): primary was "GC=F" (COMEX gold futures) which
+# trades at ~$2-7 PREMIUM over spot due to contango/interest-rate
+# differential. Real Exness/MT5 broker quotes XAU/USD SPOT, so signals
+# computed from GC=F close were ~$5-7 above real entry/SL/TP. Switched
+# to "XAUUSD=X" (Yahoo's FX spot quote) which tracks broker spot within
+# ~$0.50 typically. GC=F kept as last fallback only.
 FALLBACK_TICKERS = {
-    "xau":    ["GC=F", "XAUUSD=X", "GLD", "IAU"],     # gold futures -> spot fx -> ETF -> alt ETF
+    "xau":    ["XAUUSD=X", "GC=F", "GLD", "IAU"],     # SPOT FX -> futures -> ETF -> alt
     "dxy":    ["DX-Y.NYB", "DX=F", "UUP"],            # ICE DXY -> futures -> bullish dollar ETF
     "us10y":  ["^TNX", "^IRX", "TLT"],                # 10Y yield -> 13W -> long bond ETF
     "tip":    ["TIP", "VTIP", "SCHP"],                # IMPROVEMENT #2: TIPS ETF (real yield proxy)

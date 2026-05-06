@@ -9,6 +9,12 @@ interface Props {
   bundle: SignalBundle
 }
 
+function ageMinutes(iso: string): number {
+  try {
+    return Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 60_000))
+  } catch { return 0 }
+}
+
 export default function HeroCard({ bundle }: Props) {
   const { final_action: action, signal_strength: strength, confidence } = bundle
   const strDesc = STRENGTH_DESC[strength]
@@ -85,7 +91,16 @@ export default function HeroCard({ bundle }: Props) {
           <p className="text-2xl font-black tabular-nums leading-tight">
             ${fmtPrice(bundle.xau_price)}
           </p>
-          <p className="text-[10px] opacity-50 mt-0.5">per troy oz</p>
+          <p className="text-[10px] opacity-50 mt-0.5">
+            {bundle.xau_price_source === 'twelvedata' ? 'spot · Twelve Data'
+              : bundle.xau_price_source === 'yfinance_fallback' ? 'yfinance · check broker'
+              : 'per troy oz'}
+          </p>
+          {bundle.timestamp && (
+            <p className="text-[9px] opacity-40 mt-0.5">
+              signal {ageMinutes(bundle.timestamp)}m lalu
+            </p>
+          )}
         </div>
       </div>
 
