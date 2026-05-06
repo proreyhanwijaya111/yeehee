@@ -320,32 +320,29 @@ class SettingsStore:
                 "trigger_reason":  bundle.get("_trigger_reason", "scheduled"),
                 # Migration 012: RCS composite snapshot for home/signals RcsPanel
                 "rcs":             bundle.get("rcs"),
+                # Migration 016: per-agent audit + engine metadata
+                "agent_verdicts":  bundle.get("agent_verdicts"),
+                "engine_meta":     bundle.get("engine_meta"),
             }
-            # Defensive insert: drop unknown columns one-by-one if any migration
-            # is not yet applied. We try all → drop trigger_reason → drop rcs.
+            # Defensive insert: drop unknown columns progressively if migrations
+            # not yet applied. Order: drop new audit cols → rcs → trigger_reason.
+            optional_cols_to_drop = ["agent_verdicts", "engine_meta", "rcs", "trigger_reason"]
             try:
                 r = self._client.from_("signal_bundles").insert(payload).execute()
             except Exception as e:
-                msg = str(e).lower()
-                # Drop rcs column if migration 012 not yet applied
-                if "rcs" in msg and ("column" in msg or "schema" in msg or "does not exist" in msg):
-                    payload.pop("rcs", None)
+                last_err = e
+                # Try dropping cols one-by-one until insert succeeds
+                r = None
+                for col in optional_cols_to_drop:
+                    payload.pop(col, None)
                     try:
                         r = self._client.from_("signal_bundles").insert(payload).execute()
-                    except Exception as e2:
-                        msg2 = str(e2).lower()
-                        if "trigger_reason" in msg2 or "column" in msg2:
-                            payload.pop("trigger_reason", None)
-                            r = self._client.from_("signal_bundles").insert(payload).execute()
-                        else:
-                            raise
-                # Drop trigger_reason if migration 005 not applied
-                elif "trigger_reason" in msg or "column" in msg:
-                    payload.pop("trigger_reason", None)
-                    payload.pop("rcs", None)
-                    r = self._client.from_("signal_bundles").insert(payload).execute()
-                else:
-                    raise
+                        break
+                    except Exception as e_retry:
+                        last_err = e_retry
+                        continue
+                if r is None:
+                    raise last_err
             new_row = (r.data or [{}])[0]
             bundle_id = new_row.get("id")
 
@@ -434,6 +431,48 @@ def _select_llm_provider_chain(default_provider: str, router: "LLMRouter") -> li
     return chain
 
 
+def run_debate(
+    market_ctx: dict,
+    settings: dict,
+    provider_keys: dict[str, dict],
+    agent_configs: dict[str, AgentRunConfig],
+    parallel: bool = True,
+    log=print,
+) -> dict:
+    """Top-level debate router. Picks engine based on settings.use_local_agents:
+      - true  (default after migration 015): local 12-agent rule pipeline
+      - false: legacy LLM 12-agent debate (this function below)
+
+    Devil's Advocate sub-engine controlled by settings.da_engine ('local'|'llm').
+    """
+    use_local = bool(settings.get("use_local_agents", True))
+    if use_local:
+        try:
+            from ai_agent.local_agents import run_local_pipeline
+        except ImportError as e:
+            log(f"[orchestrator] local_agents import failed: {e!r} — falling back to LLM")
+            return run_llm_debate(market_ctx, settings, provider_keys, agent_configs, parallel)
+
+        # Build LLM router only if DA needs LLM (lazy)
+        da_engine = settings.get("da_engine", "local")
+        llm_router = None
+        if da_engine == "llm":
+            llm_router = LLMRouter()
+            for prov, cred in provider_keys.items():
+                llm_router.set_credential(prov, api_key=cred.get("api_key"), base_url=cred.get("base_url"))
+
+        return run_local_pipeline(
+            market_ctx=market_ctx,
+            da_engine=da_engine,
+            llm_router=llm_router,
+            da_llm_provider=settings.get("da_llm_provider") or settings.get("default_llm_provider"),
+            da_llm_model=settings.get("da_llm_model")    or settings.get("default_llm_model"),
+            log=log,
+        )
+
+    return run_llm_debate(market_ctx, settings, provider_keys, agent_configs, parallel)
+
+
 def run_llm_debate(
     market_ctx: dict,
     settings: dict,
@@ -511,6 +550,10 @@ def build_market_context(
     in_blackout: bool, blackout_event, upcoming_events: list,
     timeframe_focus: str = "intraday",
     rcs_result: Optional[dict] = None,
+    df_5m=None, df_1h=None, df_1d=None,
+    near_london_fix: bool = False,
+    xau_price: Optional[float] = None,
+    store=None,
 ) -> dict:
     """Build market context for LLM agents.
 
@@ -544,6 +587,22 @@ def build_market_context(
         "session":   session,
         "regime":    regime,
         "timeframe_focus": timeframe_focus,
+        # Local-agent extensions (orchestrator.run_debate routes to local_agents
+        # which expects raw DataFrames + store handle — gracefully ignored by
+        # legacy LLM debate)
+        "df_5m":      df_5m,
+        "df_15m":     df_15m,
+        "df_1h":      df_1h,
+        "df_4h":      df_4h,
+        "df_1d":      df_1d,
+        "intermarket": intermarket,
+        "cot":        cot,
+        "in_news_blackout": in_blackout,
+        "blackout_event":   blackout_event,
+        "upcoming_events":  upcoming_events,
+        "near_london_fix":  near_london_fix,
+        "xau_price":        xau_price,
+        "store":            store,
         # Structured numerical (NEW — primary signal)
         "htf_numeric":   extract_htf_numeric(df_4h),
         "ltf_numeric":   extract_ltf_numeric(df_15m, tf_label="M15"),

@@ -19,7 +19,7 @@ from strategies.base import StrategyContext
 from strategies import scalper, intraday, swing
 from ai_agent.rule_engine import debate as rule_debate
 from ai_agent.orchestrator import (
-    SettingsStore, run_llm_debate, build_market_context,
+    SettingsStore, run_llm_debate, run_debate, build_market_context,
 )
 
 # RCS — composite reference indicator (optional, gracefully skipped if package missing)
@@ -123,39 +123,48 @@ def run_once(store: SettingsStore, settings: dict, log=print, trigger_reason: st
             log(f"[rcs] compute failed: {e!r}")
             rcs_result_dict = None
 
-    # 9-agent debate (LLM) or fallback rule debate
-    use_llm = bool(settings.get("use_llm_agents", True))
+    # ── Debate engine: route via orchestrator.run_debate ──────────────────────
+    # Local 12-agent (default after migration 015) | LLM 12-agent | rule fallback
+    use_llm_legacy = not bool(settings.get("use_local_agents", True))
+    use_llm_master = bool(settings.get("use_llm_agents", True))
     debate_dict: dict
-    if use_llm:
-        log("[runner] running 9-agent LLM debate...")
-        provider_keys = store.provider_keys()
-        agent_cfgs    = store.agent_configs()
-        ctx = build_market_context(
-            df_15m=df_15m, df_4h=df_4h,
-            intermarket=inter, cot=cot, session=sess, regime=regime_label,
-            in_blackout=in_blk, blackout_event=blk_evt,
-            upcoming_events=upc,
-            timeframe_focus=settings.get("timeframe_focus") or "intraday",
-            rcs_result=rcs_result_dict,   # RCS composite reference
-        )
+    provider_keys = store.provider_keys()
+    agent_cfgs    = store.agent_configs()
+    ctx = build_market_context(
+        df_15m=df_15m, df_4h=df_4h,
+        intermarket=inter, cot=cot, session=sess, regime=regime_label,
+        in_blackout=in_blk, blackout_event=blk_evt,
+        upcoming_events=upc,
+        timeframe_focus=settings.get("timeframe_focus") or "intraday",
+        rcs_result=rcs_result_dict,
+        df_5m=df_5m, df_1h=df_1h, df_1d=df_1d,
+        near_london_fix=fix,
+        xau_price=float(realtime.get("price") or (df_1h["close"].iloc[-1] if df_1h is not None and len(df_1h) else 0.0)),
+        store=store,
+    )
+
+    if not use_llm_master:
+        log("[runner] LLM master toggle OFF — rule engine 4-agent")
+        debate_dict = _rule_debate_dict(df_1h, df_4h, inter, cot, sess, in_blk, blk_evt)
+    else:
         try:
-            debate_dict = run_llm_debate(
+            engine_label = "local-12-agent" if not use_llm_legacy else "llm-12-agent"
+            log(f"[runner] running {engine_label} debate...")
+            debate_dict = run_debate(
                 market_ctx=ctx,
                 settings=settings,
                 provider_keys=provider_keys,
                 agent_configs=agent_cfgs,
                 parallel=True,
+                log=log,
             )
-            if debate_dict.get("error") == "no_credential":
-                log("[runner] no LLM credential — fallback to rule engine")
+            if debate_dict.get("error") in ("no_credential", "all_providers_failed"):
+                log(f"[runner] debate engine error: {debate_dict.get('error')} — fallback to rule")
                 debate_dict = _rule_debate_dict(df_1h, df_4h, inter, cot, sess, in_blk, blk_evt)
         except Exception as e:
-            log(f"[runner] LLM debate failed: {e!r}")
+            log(f"[runner] debate failed: {e!r}")
             traceback.print_exc()
             debate_dict = _rule_debate_dict(df_1h, df_4h, inter, cot, sess, in_blk, blk_evt)
-    else:
-        log("[runner] running rule-engine debate (LLM disabled)")
-        debate_dict = _rule_debate_dict(df_1h, df_4h, inter, cot, sess, in_blk, blk_evt)
 
     # xau_price: prefer real-time spot, fallback to last 1h close
     xau_price_value = realtime.get("price")
@@ -189,7 +198,11 @@ def run_once(store: SettingsStore, settings: dict, log=print, trigger_reason: st
         "intraday":       sig_intraday.to_dict(),
         "swing":          sig_swing.to_dict(),
         "debate":         debate_dict,
-        "ai_pm_used":     use_llm,
+        "ai_pm_used":     use_llm_master,
+        # Migration 016: per-agent audit trail. Local-12-agent populates
+        # agent_verdicts list + engine_meta dict; legacy LLM/rule path may not.
+        "agent_verdicts": debate_dict.get("agents") if isinstance(debate_dict, dict) else None,
+        "engine_meta":    debate_dict.get("engine_meta") if isinstance(debate_dict, dict) else None,
         # RCS composite reference indicator (read by /signals UI as side panel)
         "rcs":            rcs_result_dict,
         # Opsi B: persisted to signal_bundles.trigger_reason

@@ -40,6 +40,11 @@ export type AppSettings = {
   ea_enable_trailing?: boolean
   ea_trailing_trigger_pips?: number
   ea_trailing_distance_pips?: number
+  // Local 12-agent + Devil's Advocate engine selector (migration 015)
+  use_local_agents?: boolean        // true = local rule-based (default), false = legacy LLM 12-agent
+  da_engine?: 'local' | 'llm'       // Devil's Advocate engine
+  da_llm_provider?: string | null   // when da_engine='llm', null = use default_llm_provider
+  da_llm_model?: string | null      // when da_engine='llm', null = use default_llm_model
 }
 
 export type ProviderKey = {

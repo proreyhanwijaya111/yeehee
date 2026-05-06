@@ -1,0 +1,1071 @@
+{
+  "agent_id": "pattern_expert",
+  "version": "2.0.0",
+  "asset": "XAUUSD",
+  "covered_timeframes": [
+    "D1",
+    "M30",
+    "M15",
+    "M5"
+  ],
+  "data_source_for_stats": {
+    "daily": "synthetic_16y_calibrated_to_xau_2010_2026 (4262 bars, ~10.9% CAGR, 18% vol)",
+    "intraday": "synthetic_6mo_session_aware (37k M5 bars, session vol mult: Asian 0.4x, London 1.2x, Overlap 1.6x, NY 1.0x)",
+    "spread_assumption_usd": 0.3,
+    "warning": "Re-validate ALL stats on real broker data before production. Synthetic intraday may UNDERESTIMATE real edge at session opens/round numbers (not modeled)."
+  },
+  "scalping_key_findings": {
+    "M5": "MOSTLY UNPROFITABLE standalone \u2014 spread eats edge. Use only as exit confirmation or for high-conviction confluence.",
+    "M15": "MARGINAL \u2014 only inside_bar and hammer near breakeven. Need strict S/R + trend filter to be viable.",
+    "M30": "VIABLE \u2014 pin_bar_bullish shows +0.03R EV after spread, inside_bar near breakeven. Best scalping TF."
+  },
+  "patterns_daily": [
+    {
+      "name": "Hammer D1",
+      "timeframe": "D1",
+      "bias": "bullish",
+      "frequency_per_year": 0.18,
+      "win_rate_historical": 0.6667,
+      "avg_R": 0.4473,
+      "profit_factor": 2.342,
+      "n_samples": 3,
+      "production_role": "primary_long",
+      "validation_status": "synthetic_16y_calibrated_2010_2026"
+    },
+    {
+      "name": "Bullish Engulfing D1",
+      "timeframe": "D1",
+      "bias": "bullish",
+      "frequency_per_year": 7.23,
+      "win_rate_historical": 0.5517,
+      "avg_R": 0.1898,
+      "profit_factor": 1.563,
+      "n_samples": 116,
+      "production_role": "primary_long",
+      "validation_status": "synthetic_16y_calibrated_2010_2026"
+    },
+    {
+      "name": "Piercing Line D1",
+      "timeframe": "D1",
+      "bias": "bullish",
+      "frequency_per_year": 0.55,
+      "win_rate_historical": 0.6667,
+      "avg_R": 0.1775,
+      "profit_factor": 1.657,
+      "n_samples": 9,
+      "production_role": "primary_long",
+      "validation_status": "synthetic_16y_calibrated_2010_2026"
+    },
+    {
+      "name": "Morning Star D1",
+      "timeframe": "D1",
+      "bias": "bullish",
+      "frequency_per_year": 4.47,
+      "win_rate_historical": 0.507,
+      "avg_R": 0.1709,
+      "profit_factor": 1.393,
+      "n_samples": 71,
+      "production_role": "primary_long",
+      "validation_status": "synthetic_16y_calibrated_2010_2026"
+    },
+    {
+      "name": "Bullish Harami D1",
+      "timeframe": "D1",
+      "bias": "bullish",
+      "frequency_per_year": 6.49,
+      "win_rate_historical": 0.5049,
+      "avg_R": 0.1181,
+      "profit_factor": 1.279,
+      "n_samples": 103,
+      "production_role": "secondary_long",
+      "validation_status": "synthetic_16y_calibrated_2010_2026"
+    },
+    {
+      "name": "Pin Bar Bullish D1",
+      "timeframe": "D1",
+      "bias": "bullish",
+      "frequency_per_year": 15.98,
+      "win_rate_historical": 0.4749,
+      "avg_R": 0.0792,
+      "profit_factor": 1.176,
+      "n_samples": 259,
+      "production_role": "secondary_long",
+      "validation_status": "synthetic_16y_calibrated_2010_2026"
+    },
+    {
+      "name": "Inside Bar D1",
+      "timeframe": "D1",
+      "bias": "neutral",
+      "frequency_per_year": 50.09,
+      "win_rate_historical": 0.471,
+      "avg_R": 0.0449,
+      "profit_factor": 1.105,
+      "n_samples": 809,
+      "production_role": "filter_or_confirmation",
+      "validation_status": "synthetic_16y_calibrated_2010_2026"
+    },
+    {
+      "name": "Bearish Harami D1",
+      "timeframe": "D1",
+      "bias": "bearish",
+      "frequency_per_year": 7.04,
+      "win_rate_historical": 0.4737,
+      "avg_R": 0.0038,
+      "profit_factor": 1.009,
+      "n_samples": 114,
+      "production_role": "filter_or_confirmation",
+      "validation_status": "synthetic_16y_calibrated_2010_2026"
+    },
+    {
+      "name": "Three White Soldiers D1",
+      "timeframe": "D1",
+      "bias": "bullish",
+      "frequency_per_year": 0.92,
+      "win_rate_historical": 0.4667,
+      "avg_R": -0.1205,
+      "profit_factor": 0.748,
+      "n_samples": 15,
+      "production_role": "weak_avoid",
+      "validation_status": "synthetic_16y_calibrated_2010_2026"
+    },
+    {
+      "name": "Bearish Engulfing D1",
+      "timeframe": "D1",
+      "bias": "bearish",
+      "frequency_per_year": 7.1,
+      "win_rate_historical": 0.3966,
+      "avg_R": -0.1601,
+      "profit_factor": 0.693,
+      "n_samples": 116,
+      "production_role": "exit_signal_only",
+      "validation_status": "synthetic_16y_calibrated_2010_2026"
+    },
+    {
+      "name": "Evening Star D1",
+      "timeframe": "D1",
+      "bias": "bearish",
+      "frequency_per_year": 4.16,
+      "win_rate_historical": 0.3788,
+      "avg_R": -0.1727,
+      "profit_factor": 0.668,
+      "n_samples": 66,
+      "production_role": "exit_signal_only",
+      "validation_status": "synthetic_16y_calibrated_2010_2026"
+    },
+    {
+      "name": "Pin Bar Bearish D1",
+      "timeframe": "D1",
+      "bias": "bearish",
+      "frequency_per_year": 13.78,
+      "win_rate_historical": 0.3801,
+      "avg_R": -0.2037,
+      "profit_factor": 0.603,
+      "n_samples": 221,
+      "production_role": "exit_signal_only",
+      "validation_status": "synthetic_16y_calibrated_2010_2026"
+    },
+    {
+      "name": "Three Black Crows D1",
+      "timeframe": "D1",
+      "bias": "bearish",
+      "frequency_per_year": 0.31,
+      "win_rate_historical": 0.4,
+      "avg_R": -0.2909,
+      "profit_factor": 0.515,
+      "n_samples": 5,
+      "production_role": "exit_signal_only",
+      "validation_status": "synthetic_16y_calibrated_2010_2026"
+    },
+    {
+      "name": "Shooting Star D1",
+      "timeframe": "D1",
+      "bias": "bearish",
+      "frequency_per_year": 2.2,
+      "win_rate_historical": 0.3143,
+      "avg_R": -0.3104,
+      "profit_factor": 0.485,
+      "n_samples": 35,
+      "production_role": "exit_signal_only",
+      "validation_status": "synthetic_16y_calibrated_2010_2026"
+    },
+    {
+      "name": "Dark Cloud Cover D1",
+      "timeframe": "D1",
+      "bias": "bearish",
+      "frequency_per_year": 0.24,
+      "win_rate_historical": 0.25,
+      "avg_R": -0.3942,
+      "profit_factor": 0.275,
+      "n_samples": 4,
+      "production_role": "exit_signal_only",
+      "validation_status": "synthetic_16y_calibrated_2010_2026"
+    }
+  ],
+  "patterns_scalping": {
+    "M30": [
+      {
+        "name": "Pin Bar Bullish M30",
+        "timeframe": "M30",
+        "pattern_base": "pin_bar_bullish",
+        "bias": "bullish",
+        "frequency_per_year": 573.0,
+        "win_rate_historical": 0.5079,
+        "avg_R": 0.0344,
+        "profit_factor": 1.085,
+        "n_samples": 126,
+        "rr_target": 1.67,
+        "spread_modeled_usd": 0.3,
+        "session_filter_applied": [
+          "london",
+          "london_ny_overlap",
+          "ny"
+        ],
+        "news_hours_skipped_utc": [
+          12,
+          13,
+          14
+        ],
+        "comparison_no_filter": {
+          "win_rate": 0.464,
+          "avg_R": -0.0219,
+          "n_samples": 278
+        },
+        "production_role": "marginal_use_with_extra_filters",
+        "validation_status": "synthetic_6mo_session_aware_intraday"
+      },
+      {
+        "name": "Bullish Harami M30",
+        "timeframe": "M30",
+        "pattern_base": "bullish_harami",
+        "bias": "bullish",
+        "frequency_per_year": 0.0,
+        "win_rate_historical": 0.0,
+        "avg_R": 0.0,
+        "profit_factor": null,
+        "n_samples": 0,
+        "rr_target": 1.67,
+        "spread_modeled_usd": 0.3,
+        "session_filter_applied": [
+          "london",
+          "london_ny_overlap",
+          "ny"
+        ],
+        "news_hours_skipped_utc": [
+          12,
+          13,
+          14
+        ],
+        "comparison_no_filter": {
+          "win_rate": 0.0,
+          "avg_R": 0.0,
+          "n_samples": 0
+        },
+        "production_role": "near_breakeven_avoid_unless_high_conviction",
+        "validation_status": "synthetic_6mo_session_aware_intraday"
+      },
+      {
+        "name": "Bearish Harami M30",
+        "timeframe": "M30",
+        "pattern_base": "bearish_harami",
+        "bias": "bearish",
+        "frequency_per_year": 0.0,
+        "win_rate_historical": 0.0,
+        "avg_R": 0.0,
+        "profit_factor": null,
+        "n_samples": 0,
+        "rr_target": 1.67,
+        "spread_modeled_usd": 0.3,
+        "session_filter_applied": [
+          "london",
+          "london_ny_overlap",
+          "ny"
+        ],
+        "news_hours_skipped_utc": [
+          12,
+          13,
+          14
+        ],
+        "comparison_no_filter": {
+          "win_rate": 0.0,
+          "avg_R": 0.0,
+          "n_samples": 0
+        },
+        "production_role": "near_breakeven_avoid_unless_high_conviction",
+        "validation_status": "synthetic_6mo_session_aware_intraday"
+      },
+      {
+        "name": "Hammer M30",
+        "timeframe": "M30",
+        "pattern_base": "hammer",
+        "bias": "bullish",
+        "frequency_per_year": 6.0,
+        "win_rate_historical": 0.0,
+        "avg_R": 0.0,
+        "profit_factor": null,
+        "n_samples": 0,
+        "rr_target": 1.67,
+        "spread_modeled_usd": 0.3,
+        "session_filter_applied": [
+          "london",
+          "london_ny_overlap",
+          "ny"
+        ],
+        "news_hours_skipped_utc": [
+          12,
+          13,
+          14
+        ],
+        "comparison_no_filter": {
+          "win_rate": 1.0,
+          "avg_R": 1.6022,
+          "n_samples": 3
+        },
+        "production_role": "near_breakeven_avoid_unless_high_conviction",
+        "validation_status": "synthetic_6mo_session_aware_intraday"
+      },
+      {
+        "name": "Inside Bar M30",
+        "timeframe": "M30",
+        "pattern_base": "inside_bar",
+        "bias": "neutral",
+        "frequency_per_year": 1679.0,
+        "win_rate_historical": 0.4488,
+        "avg_R": -0.0229,
+        "profit_factor": 0.947,
+        "n_samples": 361,
+        "rr_target": 1.67,
+        "spread_modeled_usd": 0.3,
+        "session_filter_applied": [
+          "london",
+          "london_ny_overlap",
+          "ny"
+        ],
+        "news_hours_skipped_utc": [
+          12,
+          13,
+          14
+        ],
+        "comparison_no_filter": {
+          "win_rate": 0.4501,
+          "avg_R": -0.0237,
+          "n_samples": 811
+        },
+        "production_role": "near_breakeven_avoid_unless_high_conviction",
+        "validation_status": "synthetic_6mo_session_aware_intraday"
+      },
+      {
+        "name": "Bearish Engulfing M30",
+        "timeframe": "M30",
+        "pattern_base": "bearish_engulfing",
+        "bias": "bearish",
+        "frequency_per_year": 802.0,
+        "win_rate_historical": 0.3711,
+        "avg_R": -0.1455,
+        "profit_factor": 0.724,
+        "n_samples": 159,
+        "rr_target": 1.67,
+        "spread_modeled_usd": 0.3,
+        "session_filter_applied": [
+          "london",
+          "london_ny_overlap",
+          "ny"
+        ],
+        "news_hours_skipped_utc": [
+          12,
+          13,
+          14
+        ],
+        "comparison_no_filter": {
+          "win_rate": 0.3798,
+          "avg_R": -0.1789,
+          "n_samples": 387
+        },
+        "production_role": "DO_NOT_TRADE_standalone_use_only_as_exit_or_confluence",
+        "validation_status": "synthetic_6mo_session_aware_intraday"
+      },
+      {
+        "name": "Bullish Engulfing M30",
+        "timeframe": "M30",
+        "pattern_base": "bullish_engulfing",
+        "bias": "bullish",
+        "frequency_per_year": 767.0,
+        "win_rate_historical": 0.3904,
+        "avg_R": -0.1637,
+        "profit_factor": 0.682,
+        "n_samples": 187,
+        "rr_target": 1.67,
+        "spread_modeled_usd": 0.3,
+        "session_filter_applied": [
+          "london",
+          "london_ny_overlap",
+          "ny"
+        ],
+        "news_hours_skipped_utc": [
+          12,
+          13,
+          14
+        ],
+        "comparison_no_filter": {
+          "win_rate": 0.4086,
+          "avg_R": -0.1502,
+          "n_samples": 372
+        },
+        "production_role": "DO_NOT_TRADE_standalone_use_only_as_exit_or_confluence",
+        "validation_status": "synthetic_6mo_session_aware_intraday"
+      },
+      {
+        "name": "Shooting Star M30",
+        "timeframe": "M30",
+        "pattern_base": "shooting_star",
+        "bias": "bearish",
+        "frequency_per_year": 49.0,
+        "win_rate_historical": 0.2857,
+        "avg_R": -0.2238,
+        "profit_factor": 0.558,
+        "n_samples": 14,
+        "rr_target": 1.67,
+        "spread_modeled_usd": 0.3,
+        "session_filter_applied": [
+          "london",
+          "london_ny_overlap",
+          "ny"
+        ],
+        "news_hours_skipped_utc": [
+          12,
+          13,
+          14
+        ],
+        "comparison_no_filter": {
+          "win_rate": 0.375,
+          "avg_R": -0.0589,
+          "n_samples": 24
+        },
+        "production_role": "DO_NOT_TRADE_standalone_use_only_as_exit_or_confluence",
+        "validation_status": "synthetic_6mo_session_aware_intraday"
+      },
+      {
+        "name": "Pin Bar Bearish M30",
+        "timeframe": "M30",
+        "pattern_base": "pin_bar_bearish",
+        "bias": "bearish",
+        "frequency_per_year": 573.0,
+        "win_rate_historical": 0.3277,
+        "avg_R": -0.2612,
+        "profit_factor": 0.527,
+        "n_samples": 119,
+        "rr_target": 1.67,
+        "spread_modeled_usd": 0.3,
+        "session_filter_applied": [
+          "london",
+          "london_ny_overlap",
+          "ny"
+        ],
+        "news_hours_skipped_utc": [
+          12,
+          13,
+          14
+        ],
+        "comparison_no_filter": {
+          "win_rate": 0.3561,
+          "avg_R": -0.1492,
+          "n_samples": 278
+        },
+        "production_role": "DO_NOT_TRADE_standalone_use_only_as_exit_or_confluence",
+        "validation_status": "synthetic_6mo_session_aware_intraday"
+      }
+    ],
+    "M15": [
+      {
+        "name": "Bullish Harami M15",
+        "timeframe": "M15",
+        "pattern_base": "bullish_harami",
+        "bias": "bullish",
+        "frequency_per_year": 2.0,
+        "win_rate_historical": 0.0,
+        "avg_R": 0.0,
+        "profit_factor": null,
+        "n_samples": 0,
+        "rr_target": 1.8,
+        "spread_modeled_usd": 0.3,
+        "session_filter_applied": [
+          "london",
+          "london_ny_overlap",
+          "ny"
+        ],
+        "news_hours_skipped_utc": [
+          12,
+          13,
+          14
+        ],
+        "comparison_no_filter": {
+          "win_rate": 1.0,
+          "avg_R": 0.1452,
+          "n_samples": 1
+        },
+        "production_role": "near_breakeven_avoid_unless_high_conviction",
+        "validation_status": "synthetic_6mo_session_aware_intraday"
+      },
+      {
+        "name": "Bearish Harami M15",
+        "timeframe": "M15",
+        "pattern_base": "bearish_harami",
+        "bias": "bearish",
+        "frequency_per_year": 0.0,
+        "win_rate_historical": 0.0,
+        "avg_R": 0.0,
+        "profit_factor": null,
+        "n_samples": 0,
+        "rr_target": 1.8,
+        "spread_modeled_usd": 0.3,
+        "session_filter_applied": [
+          "london",
+          "london_ny_overlap",
+          "ny"
+        ],
+        "news_hours_skipped_utc": [
+          12,
+          13,
+          14
+        ],
+        "comparison_no_filter": {
+          "win_rate": 0.0,
+          "avg_R": 0.0,
+          "n_samples": 0
+        },
+        "production_role": "near_breakeven_avoid_unless_high_conviction",
+        "validation_status": "synthetic_6mo_session_aware_intraday"
+      },
+      {
+        "name": "Hammer M15",
+        "timeframe": "M15",
+        "pattern_base": "hammer",
+        "bias": "bullish",
+        "frequency_per_year": 16.0,
+        "win_rate_historical": 0.4,
+        "avg_R": -0.0119,
+        "profit_factor": 0.973,
+        "n_samples": 5,
+        "rr_target": 1.8,
+        "spread_modeled_usd": 0.3,
+        "session_filter_applied": [
+          "london",
+          "london_ny_overlap",
+          "ny"
+        ],
+        "news_hours_skipped_utc": [
+          12,
+          13,
+          14
+        ],
+        "comparison_no_filter": {
+          "win_rate": 0.375,
+          "avg_R": 0.0265,
+          "n_samples": 8
+        },
+        "production_role": "near_breakeven_avoid_unless_high_conviction",
+        "validation_status": "synthetic_6mo_session_aware_intraday"
+      },
+      {
+        "name": "Inside Bar M15",
+        "timeframe": "M15",
+        "pattern_base": "inside_bar",
+        "bias": "neutral",
+        "frequency_per_year": 3865.0,
+        "win_rate_historical": 0.4327,
+        "avg_R": -0.0439,
+        "profit_factor": 0.915,
+        "n_samples": 832,
+        "rr_target": 1.8,
+        "spread_modeled_usd": 0.3,
+        "session_filter_applied": [
+          "london",
+          "london_ny_overlap",
+          "ny"
+        ],
+        "news_hours_skipped_utc": [
+          12,
+          13,
+          14
+        ],
+        "comparison_no_filter": {
+          "win_rate": 0.407,
+          "avg_R": -0.099,
+          "n_samples": 1882
+        },
+        "production_role": "near_breakeven_avoid_unless_high_conviction",
+        "validation_status": "synthetic_6mo_session_aware_intraday"
+      },
+      {
+        "name": "Shooting Star M15",
+        "timeframe": "M15",
+        "pattern_base": "shooting_star",
+        "bias": "bearish",
+        "frequency_per_year": 108.0,
+        "win_rate_historical": 0.36,
+        "avg_R": -0.0946,
+        "profit_factor": 0.813,
+        "n_samples": 25,
+        "rr_target": 1.8,
+        "spread_modeled_usd": 0.3,
+        "session_filter_applied": [
+          "london",
+          "london_ny_overlap",
+          "ny"
+        ],
+        "news_hours_skipped_utc": [
+          12,
+          13,
+          14
+        ],
+        "comparison_no_filter": {
+          "win_rate": 0.3585,
+          "avg_R": -0.2023,
+          "n_samples": 53
+        },
+        "production_role": "DO_NOT_TRADE_standalone_use_only_as_exit_or_confluence",
+        "validation_status": "synthetic_6mo_session_aware_intraday"
+      },
+      {
+        "name": "Pin Bar Bearish M15",
+        "timeframe": "M15",
+        "pattern_base": "pin_bar_bearish",
+        "bias": "bearish",
+        "frequency_per_year": 1294.0,
+        "win_rate_historical": 0.407,
+        "avg_R": -0.1065,
+        "profit_factor": 0.807,
+        "n_samples": 285,
+        "rr_target": 1.8,
+        "spread_modeled_usd": 0.3,
+        "session_filter_applied": [
+          "london",
+          "london_ny_overlap",
+          "ny"
+        ],
+        "news_hours_skipped_utc": [
+          12,
+          13,
+          14
+        ],
+        "comparison_no_filter": {
+          "win_rate": 0.3694,
+          "avg_R": -0.2066,
+          "n_samples": 628
+        },
+        "production_role": "DO_NOT_TRADE_standalone_use_only_as_exit_or_confluence",
+        "validation_status": "synthetic_6mo_session_aware_intraday"
+      },
+      {
+        "name": "Pin Bar Bullish M15",
+        "timeframe": "M15",
+        "pattern_base": "pin_bar_bullish",
+        "bias": "bullish",
+        "frequency_per_year": 1302.0,
+        "win_rate_historical": 0.3684,
+        "avg_R": -0.1426,
+        "profit_factor": 0.744,
+        "n_samples": 304,
+        "rr_target": 1.8,
+        "spread_modeled_usd": 0.3,
+        "session_filter_applied": [
+          "london",
+          "london_ny_overlap",
+          "ny"
+        ],
+        "news_hours_skipped_utc": [
+          12,
+          13,
+          14
+        ],
+        "comparison_no_filter": {
+          "win_rate": 0.3726,
+          "avg_R": -0.1471,
+          "n_samples": 636
+        },
+        "production_role": "DO_NOT_TRADE_standalone_use_only_as_exit_or_confluence",
+        "validation_status": "synthetic_6mo_session_aware_intraday"
+      },
+      {
+        "name": "Bullish Engulfing M15",
+        "timeframe": "M15",
+        "pattern_base": "bullish_engulfing",
+        "bias": "bullish",
+        "frequency_per_year": 1526.0,
+        "win_rate_historical": 0.3743,
+        "avg_R": -0.1778,
+        "profit_factor": 0.692,
+        "n_samples": 358,
+        "rr_target": 1.8,
+        "spread_modeled_usd": 0.3,
+        "session_filter_applied": [
+          "london",
+          "london_ny_overlap",
+          "ny"
+        ],
+        "news_hours_skipped_utc": [
+          12,
+          13,
+          14
+        ],
+        "comparison_no_filter": {
+          "win_rate": 0.3628,
+          "avg_R": -0.1868,
+          "n_samples": 747
+        },
+        "production_role": "DO_NOT_TRADE_standalone_use_only_as_exit_or_confluence",
+        "validation_status": "synthetic_6mo_session_aware_intraday"
+      },
+      {
+        "name": "Bearish Engulfing M15",
+        "timeframe": "M15",
+        "pattern_base": "bearish_engulfing",
+        "bias": "bearish",
+        "frequency_per_year": 1645.0,
+        "win_rate_historical": 0.3167,
+        "avg_R": -0.2969,
+        "profit_factor": 0.548,
+        "n_samples": 360,
+        "rr_target": 1.8,
+        "spread_modeled_usd": 0.3,
+        "session_filter_applied": [
+          "london",
+          "london_ny_overlap",
+          "ny"
+        ],
+        "news_hours_skipped_utc": [
+          12,
+          13,
+          14
+        ],
+        "comparison_no_filter": {
+          "win_rate": 0.3379,
+          "avg_R": -0.2671,
+          "n_samples": 799
+        },
+        "production_role": "DO_NOT_TRADE_standalone_use_only_as_exit_or_confluence",
+        "validation_status": "synthetic_6mo_session_aware_intraday"
+      }
+    ],
+    "M5": [
+      {
+        "name": "Bullish Harami M5",
+        "timeframe": "M5",
+        "pattern_base": "bullish_harami",
+        "bias": "bullish",
+        "frequency_per_year": 2.0,
+        "win_rate_historical": 0.0,
+        "avg_R": 0.0,
+        "profit_factor": null,
+        "n_samples": 0,
+        "rr_target": 1.5,
+        "spread_modeled_usd": 0.3,
+        "session_filter_applied": [
+          "london",
+          "london_ny_overlap",
+          "ny"
+        ],
+        "news_hours_skipped_utc": [
+          12,
+          13,
+          14
+        ],
+        "comparison_no_filter": {
+          "win_rate": 1.0,
+          "avg_R": 0.8999,
+          "n_samples": 1
+        },
+        "production_role": "near_breakeven_avoid_unless_high_conviction",
+        "validation_status": "synthetic_6mo_session_aware_intraday"
+      },
+      {
+        "name": "Bearish Harami M5",
+        "timeframe": "M5",
+        "pattern_base": "bearish_harami",
+        "bias": "bearish",
+        "frequency_per_year": 0.0,
+        "win_rate_historical": 0.0,
+        "avg_R": 0.0,
+        "profit_factor": null,
+        "n_samples": 0,
+        "rr_target": 1.5,
+        "spread_modeled_usd": 0.3,
+        "session_filter_applied": [
+          "london",
+          "london_ny_overlap",
+          "ny"
+        ],
+        "news_hours_skipped_utc": [
+          12,
+          13,
+          14
+        ],
+        "comparison_no_filter": {
+          "win_rate": 0.0,
+          "avg_R": 0.0,
+          "n_samples": 0
+        },
+        "production_role": "near_breakeven_avoid_unless_high_conviction",
+        "validation_status": "synthetic_6mo_session_aware_intraday"
+      },
+      {
+        "name": "Pin Bar Bullish M5",
+        "timeframe": "M5",
+        "pattern_base": "pin_bar_bullish",
+        "bias": "bullish",
+        "frequency_per_year": 4785.0,
+        "win_rate_historical": 0.391,
+        "avg_R": -0.1207,
+        "profit_factor": 0.805,
+        "n_samples": 1069,
+        "rr_target": 1.5,
+        "spread_modeled_usd": 0.3,
+        "session_filter_applied": [
+          "london",
+          "london_ny_overlap",
+          "ny"
+        ],
+        "news_hours_skipped_utc": [
+          12,
+          13,
+          14
+        ],
+        "comparison_no_filter": {
+          "win_rate": 0.3862,
+          "avg_R": -0.1705,
+          "n_samples": 2341
+        },
+        "production_role": "DO_NOT_TRADE_standalone_use_only_as_exit_or_confluence",
+        "validation_status": "synthetic_6mo_session_aware_intraday"
+      },
+      {
+        "name": "Inside Bar M5",
+        "timeframe": "M5",
+        "pattern_base": "inside_bar",
+        "bias": "neutral",
+        "frequency_per_year": 15898.0,
+        "win_rate_historical": 0.3869,
+        "avg_R": -0.1429,
+        "profit_factor": 0.772,
+        "n_samples": 3554,
+        "rr_target": 1.5,
+        "spread_modeled_usd": 0.3,
+        "session_filter_applied": [
+          "london",
+          "london_ny_overlap",
+          "ny"
+        ],
+        "news_hours_skipped_utc": [
+          12,
+          13,
+          14
+        ],
+        "comparison_no_filter": {
+          "win_rate": 0.3841,
+          "avg_R": -0.1861,
+          "n_samples": 7780
+        },
+        "production_role": "DO_NOT_TRADE_standalone_use_only_as_exit_or_confluence",
+        "validation_status": "synthetic_6mo_session_aware_intraday"
+      },
+      {
+        "name": "Shooting Star M5",
+        "timeframe": "M5",
+        "pattern_base": "shooting_star",
+        "bias": "bearish",
+        "frequency_per_year": 667.0,
+        "win_rate_historical": 0.3727,
+        "avg_R": -0.1573,
+        "profit_factor": 0.754,
+        "n_samples": 161,
+        "rr_target": 1.5,
+        "spread_modeled_usd": 0.3,
+        "session_filter_applied": [
+          "london",
+          "london_ny_overlap",
+          "ny"
+        ],
+        "news_hours_skipped_utc": [
+          12,
+          13,
+          14
+        ],
+        "comparison_no_filter": {
+          "win_rate": 0.3896,
+          "avg_R": -0.1735,
+          "n_samples": 326
+        },
+        "production_role": "DO_NOT_TRADE_standalone_use_only_as_exit_or_confluence",
+        "validation_status": "synthetic_6mo_session_aware_intraday"
+      },
+      {
+        "name": "Pin Bar Bearish M5",
+        "timeframe": "M5",
+        "pattern_base": "pin_bar_bearish",
+        "bias": "bearish",
+        "frequency_per_year": 4797.0,
+        "win_rate_historical": 0.3783,
+        "avg_R": -0.1739,
+        "profit_factor": 0.726,
+        "n_samples": 1031,
+        "rr_target": 1.5,
+        "spread_modeled_usd": 0.3,
+        "session_filter_applied": [
+          "london",
+          "london_ny_overlap",
+          "ny"
+        ],
+        "news_hours_skipped_utc": [
+          12,
+          13,
+          14
+        ],
+        "comparison_no_filter": {
+          "win_rate": 0.3683,
+          "avg_R": -0.2282,
+          "n_samples": 2346
+        },
+        "production_role": "DO_NOT_TRADE_standalone_use_only_as_exit_or_confluence",
+        "validation_status": "synthetic_6mo_session_aware_intraday"
+      },
+      {
+        "name": "Bearish Engulfing M5",
+        "timeframe": "M5",
+        "pattern_base": "bearish_engulfing",
+        "bias": "bearish",
+        "frequency_per_year": 5158.0,
+        "win_rate_historical": 0.3561,
+        "avg_R": -0.2252,
+        "profit_factor": 0.663,
+        "n_samples": 1157,
+        "rr_target": 1.5,
+        "spread_modeled_usd": 0.3,
+        "session_filter_applied": [
+          "london",
+          "london_ny_overlap",
+          "ny"
+        ],
+        "news_hours_skipped_utc": [
+          12,
+          13,
+          14
+        ],
+        "comparison_no_filter": {
+          "win_rate": 0.3534,
+          "avg_R": -0.2657,
+          "n_samples": 2524
+        },
+        "production_role": "DO_NOT_TRADE_standalone_use_only_as_exit_or_confluence",
+        "validation_status": "synthetic_6mo_session_aware_intraday"
+      },
+      {
+        "name": "Bullish Engulfing M5",
+        "timeframe": "M5",
+        "pattern_base": "bullish_engulfing",
+        "bias": "bullish",
+        "frequency_per_year": 4734.0,
+        "win_rate_historical": 0.3506,
+        "avg_R": -0.2354,
+        "profit_factor": 0.647,
+        "n_samples": 1044,
+        "rr_target": 1.5,
+        "spread_modeled_usd": 0.3,
+        "session_filter_applied": [
+          "london",
+          "london_ny_overlap",
+          "ny"
+        ],
+        "news_hours_skipped_utc": [
+          12,
+          13,
+          14
+        ],
+        "comparison_no_filter": {
+          "win_rate": 0.3492,
+          "avg_R": -0.2738,
+          "n_samples": 2311
+        },
+        "production_role": "DO_NOT_TRADE_standalone_use_only_as_exit_or_confluence",
+        "validation_status": "synthetic_6mo_session_aware_intraday"
+      },
+      {
+        "name": "Hammer M5",
+        "timeframe": "M5",
+        "pattern_base": "hammer",
+        "bias": "bullish",
+        "frequency_per_year": 106.0,
+        "win_rate_historical": 0.2174,
+        "avg_R": -0.5079,
+        "profit_factor": 0.379,
+        "n_samples": 23,
+        "rr_target": 1.5,
+        "spread_modeled_usd": 0.3,
+        "session_filter_applied": [
+          "london",
+          "london_ny_overlap",
+          "ny"
+        ],
+        "news_hours_skipped_utc": [
+          12,
+          13,
+          14
+        ],
+        "comparison_no_filter": {
+          "win_rate": 0.2885,
+          "avg_R": -0.3941,
+          "n_samples": 52
+        },
+        "production_role": "DO_NOT_TRADE_standalone_use_only_as_exit_or_confluence",
+        "validation_status": "synthetic_6mo_session_aware_intraday"
+      }
+    ]
+  },
+  "synthesizer_weight_recommendation": {
+    "by_timeframe": {
+      "D1": 0.1,
+      "M30": 0.07,
+      "M15": 0.04,
+      "M5": 0.02
+    },
+    "conditional_multipliers": {
+      "at_key_level": 1.5,
+      "trend_aligned": 1.2,
+      "counter_trend": 0.5,
+      "session_off_hours": 0.3,
+      "news_window": 0.0,
+      "spread_>_0.5_atr": 0.3
+    },
+    "include_only_roles": [
+      "primary_long",
+      "primary_short",
+      "primary_scalp",
+      "secondary_long",
+      "filter_or_confirmation"
+    ],
+    "exit_signal_roles": [
+      "exit_long",
+      "exit_signal_only"
+    ],
+    "ignore_roles": [
+      "weak_avoid",
+      "near_breakeven_avoid_unless_high_conviction",
+      "DO_NOT_TRADE_standalone_use_only_as_exit_or_confluence"
+    ]
+  },
+  "scalping_specific_constraints": {
+    "min_atr_threshold_usd": {
+      "M5": 1.5,
+      "M15": 2.5,
+      "M30": 4.0,
+      "rationale": "skip when intraday vol too low \u2014 spread becomes >20% of ATR"
+    },
+    "session_filters_required": true,
+    "news_filter_required": true,
+    "max_spread_usd": 0.5,
+    "min_rr": 1.5,
+    "max_bars_hold": {
+      "M5": 12,
+      "M15": 8,
+      "M30": 8
+    }
+  }
+}

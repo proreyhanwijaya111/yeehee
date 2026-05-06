@@ -116,18 +116,96 @@ export default function AgentsSettingsPage() {
           </p>
         </div>
 
-        {/* Master switch */}
-        <Group title="Mode (master switch)">
-          <ToggleRow
-            label="Pakai LLM agent"
-            sub="Aktif (recommended): 12 LLM agent + weighted voting per regime. Mati: fall back ke rule engine deterministik (cepat tapi nuance kurang)."
-            checked={settings.use_llm_agents}
-            onChange={async v => {
-              setSettings({ ...settings, use_llm_agents: v })
-              await updateAppSettings({ use_llm_agents: v })
-            }}
-          />
+        {/* Engine mode (NEW — local 12-agent vs LLM 12-agent) */}
+        <Group title="Engine mode">
+          <div className="px-3.5 py-3 space-y-3 text-[11px] text-slate-300">
+            <p className="text-slate-400 leading-relaxed">
+              Pilih cara 12 agent dijalanin. Default = <span className="text-emerald-400 font-semibold">Local</span> (gratis, cepat, deterministic, 100% offline AI).
+            </p>
+            <RadioRow
+              checked={settings.use_local_agents !== false}
+              label="Local rule-based (recommended)"
+              sub="12 agent jalan murni di PC rumah. Pattern Expert dari spec_v2 (15 candlestick + stats backtest 16 thn). Cycle ~3-5 detik konsisten. Free."
+              onChange={async () => {
+                setSettings({ ...settings, use_local_agents: true })
+                await updateAppSettings({ use_local_agents: true })
+              }}
+            />
+            <RadioRow
+              checked={settings.use_local_agents === false}
+              label="LLM 12-agent (legacy)"
+              sub="12 agent via API call (OpenRouter/Groq/dll). Cycle 10-200s, butuh internet + API key. Pakai cuma kalo lo specifically butuh AI reasoning narrative."
+              onChange={async () => {
+                setSettings({ ...settings, use_local_agents: false })
+                await updateAppSettings({ use_local_agents: false })
+              }}
+            />
+          </div>
+
+          <div className="border-t border-slate-800/80 px-3.5 py-3 space-y-3 text-[11px] text-slate-300">
+            <p className="text-slate-400 font-semibold">
+              Devil&rsquo;s Advocate engine (sub-toggle)
+            </p>
+            <p className="text-slate-500 leading-relaxed">
+              DA = agent yg argue against consensus + identify hidden risks. Bisa pake LLM untuk semantic reasoning yg lebih dalam (gak available di local rule).
+            </p>
+            <RadioRow
+              checked={settings.da_engine !== 'llm'}
+              label="Local rule-based (default)"
+              sub="7 catastrophic risk patterns deterministic: news blackout, RSI extreme, BB rejection, ATR percentile, counter-HTF-trend, agent disagreement, Asia session."
+              onChange={async () => {
+                setSettings({ ...settings, da_engine: 'local' })
+                await updateAppSettings({ da_engine: 'local' })
+              }}
+            />
+            <RadioRow
+              checked={settings.da_engine === 'llm'}
+              label="LLM (premium semantic)"
+              sub="Pakai default LLM provider+model dari Pengaturan LLM. Auto-fallback ke local kalau LLM gagal/timeout. Cost ~$0.01-0.03/cycle dengan Sonnet 4.6 + caching."
+              onChange={async () => {
+                setSettings({ ...settings, da_engine: 'llm' })
+                await updateAppSettings({ da_engine: 'llm' })
+              }}
+            />
+            {settings.da_engine === 'llm' && (
+              <div className="bg-amber-950/30 border border-amber-800/40 rounded-lg px-3 py-2 text-[10px] leading-relaxed text-amber-200/90">
+                <p className="font-semibold mb-1">⚠ DA pakai LLM</p>
+                <p>Provider: <span className="font-mono text-amber-100">{settings.da_llm_provider || settings.default_llm_provider || '(default)'}</span></p>
+                <p>Model: <span className="font-mono text-amber-100">{settings.da_llm_model || settings.default_llm_model || '(default)'}</span></p>
+                <p className="mt-1 text-amber-200/70">Atur per-agent override di list bawah jika mau pake provider/model beda.</p>
+              </div>
+            )}
+          </div>
         </Group>
+
+        {/* Audit page link */}
+        <Link
+          href="/more/settings/agents/audit"
+          className="block bg-slate-800/40 hover:bg-slate-800/60 border border-slate-800 rounded-2xl px-3.5 py-3 text-[11px] text-slate-300 transition-colors"
+        >
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="font-semibold text-slate-100">Audit log per cycle</p>
+              <p className="text-slate-500 mt-0.5">Lihat verdict tiap agent + fallback log + engine stats 24h</p>
+            </div>
+            <span className="text-slate-600">→</span>
+          </div>
+        </Link>
+
+        {/* Legacy LLM master switch (only shown when local mode OFF) */}
+        {settings.use_local_agents === false && (
+          <Group title="Legacy LLM agent toggle">
+            <ToggleRow
+              label="Pakai LLM agent"
+              sub="Aktif: 12 LLM agent + weighted voting. Mati: fall back ke rule engine 4-agent simplified."
+              checked={settings.use_llm_agents}
+              onChange={async v => {
+                setSettings({ ...settings, use_llm_agents: v })
+                await updateAppSettings({ use_llm_agents: v })
+              }}
+            />
+          </Group>
+        )}
 
         {/* Pipeline diagram */}
         <Group title="Pipeline aktif">
@@ -386,6 +464,36 @@ function ToggleRow({ label, sub, checked, onChange }: {
       </div>
       <Toggle checked={checked} onChange={onChange} />
     </label>
+  )
+}
+
+function RadioRow({ label, sub, checked, onChange }: {
+  label: string; sub: string; checked: boolean; onChange: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onChange}
+      className={`w-full text-left rounded-xl border px-3 py-2.5 transition-colors ${
+        checked
+          ? 'bg-emerald-950/30 border-emerald-700/50'
+          : 'bg-slate-900/40 border-slate-800 hover:border-slate-700'
+      }`}
+    >
+      <div className="flex items-start gap-2">
+        <span className={`mt-0.5 w-3.5 h-3.5 rounded-full border-2 shrink-0 ${
+          checked ? 'border-emerald-400 bg-emerald-500' : 'border-slate-600'
+        }`}>
+          {checked && <span className="block w-1.5 h-1.5 m-auto mt-[3px] bg-white rounded-full" />}
+        </span>
+        <div className="flex-1 min-w-0">
+          <p className={`text-[11px] font-semibold ${checked ? 'text-emerald-200' : 'text-slate-200'}`}>
+            {label}
+          </p>
+          <p className="text-[10px] text-slate-500 mt-0.5 leading-relaxed">{sub}</p>
+        </div>
+      </div>
+    </button>
   )
 }
 
