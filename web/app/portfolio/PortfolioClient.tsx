@@ -1,5 +1,5 @@
 'use client'
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import {
@@ -19,6 +19,23 @@ interface Props {
   stats:        PortfolioStats | null
   xauPrice:     number | null   // current spot for live trades chart
 }
+
+// Default risk per trade when trade.risk_pct is null (legacy pre-migration 004
+// rows). Profile "moderat" cap = 1.0% of equity. Used only as fallback.
+const DEFAULT_RISK_PCT = 0.01
+
+/** Convert pnl_r (R-unit) to portfolio % using each trade's actual risk_pct.
+ *  e.g. 2R win at 1% risk = 2.00% portfolio gain.
+ *  Simple sum (not compounded) for clarity — paper test 30 days, % accurate enough.
+ */
+function pctFromR(r: number | null | undefined, riskPct: number | null | undefined): number {
+  if (r === null || r === undefined) return 0
+  const rp = riskPct ?? DEFAULT_RISK_PCT
+  return r * rp * 100
+}
+
+const fmtPctSigned = (p: number, decimals = 2) =>
+  `${p >= 0 ? '+' : ''}${p.toFixed(decimals)}%`
 
 const STYLE_ICON: Record<string, LucideIcon> = {
   scalper:  Zap,
@@ -75,20 +92,20 @@ export default function PortfolioClient({ openTrades, closedTrades, stats, xauPr
   const filteredOpen   = filter === 'all' ? openTrades   : openTrades.filter(t => t.style === filter)
   const filteredClosed = filter === 'all' ? closedTrades : closedTrades.filter(t => t.style === filter)
 
-  // Per-style breakdown stats
+  // Per-style breakdown stats (pct-based) — pct uses trade.risk_pct per trade
   const breakdown = useMemo(() => {
-    const result: Record<string, { wins: number; losses: number; total_r: number; n: number; avg_duration_ms: number }> = {
-      scalper:  { wins: 0, losses: 0, total_r: 0, n: 0, avg_duration_ms: 0 },
-      intraday: { wins: 0, losses: 0, total_r: 0, n: 0, avg_duration_ms: 0 },
-      swing:    { wins: 0, losses: 0, total_r: 0, n: 0, avg_duration_ms: 0 },
+    const result: Record<string, { wins: number; losses: number; total_pct: number; n: number; avg_duration_ms: number }> = {
+      scalper:  { wins: 0, losses: 0, total_pct: 0, n: 0, avg_duration_ms: 0 },
+      intraday: { wins: 0, losses: 0, total_pct: 0, n: 0, avg_duration_ms: 0 },
+      swing:    { wins: 0, losses: 0, total_pct: 0, n: 0, avg_duration_ms: 0 },
     }
     for (const t of closedTrades) {
       const b = result[t.style]
       if (!b) continue
       b.n++
-      const r = t.pnl_r ?? 0
-      b.total_r += r
-      if (r > 0) b.wins++
+      const pct = pctFromR(t.pnl_r, t.risk_pct)
+      b.total_pct += pct
+      if (pct > 0) b.wins++
       else b.losses++
       if (t.opened_at && t.closed_at) {
         b.avg_duration_ms += new Date(t.closed_at).getTime() - new Date(t.opened_at).getTime()
@@ -98,6 +115,28 @@ export default function PortfolioClient({ openTrades, closedTrades, stats, xauPr
       if (result[k].n > 0) result[k].avg_duration_ms /= result[k].n
     }
     return result
+  }, [closedTrades])
+
+  // Aggregate portfolio % stats (replaces server-side R-based stats).
+  const pctStats = useMemo(() => {
+    let total = 0, wins = 0, losses = 0, n = 0, sumWin = 0, sumLoss = 0
+    for (const t of closedTrades) {
+      const pct = pctFromR(t.pnl_r, t.risk_pct)
+      total += pct
+      n++
+      if (pct > 0) { wins++; sumWin += pct }
+      else if (pct < 0) { losses++; sumLoss += pct }
+    }
+    return {
+      total_pct:  total,
+      avg_pct:    n > 0 ? total / n : 0,
+      avg_win:    wins > 0 ? sumWin / wins : 0,
+      avg_loss:   losses > 0 ? sumLoss / losses : 0,
+      win_rate:   n > 0 ? wins / n : 0,
+      n_closed:   n,
+      n_wins:     wins,
+      n_losses:   losses,
+    }
   }, [closedTrades])
 
   return (
@@ -117,7 +156,9 @@ export default function PortfolioClient({ openTrades, closedTrades, stats, xauPr
       </header>
 
       <div className="space-y-5">
-        {stats && stats.closed_count > 0 ? <StatsCard stats={stats} /> : <EmptyStats />}
+        {pctStats.n_closed > 0 ? (
+          <StatsCard pctStats={pctStats} openCount={stats?.open_count ?? openTrades.length} expired={stats?.expired ?? 0} />
+        ) : <EmptyStats />}
 
         {/* Per-style breakdown */}
         {closedTrades.length > 0 && <BreakdownCard breakdown={breakdown} />}
@@ -171,8 +212,8 @@ export default function PortfolioClient({ openTrades, closedTrades, stats, xauPr
   )
 }
 
-// Per-style breakdown table
-function BreakdownCard({ breakdown }: { breakdown: Record<string, { wins: number; losses: number; total_r: number; n: number; avg_duration_ms: number }> }) {
+// Per-style breakdown table (pct portfolio)
+function BreakdownCard({ breakdown }: { breakdown: Record<string, { wins: number; losses: number; total_pct: number; n: number; avg_duration_ms: number }> }) {
   return (
     <div>
       <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-widest mb-1.5 px-2">
@@ -183,7 +224,7 @@ function BreakdownCard({ breakdown }: { breakdown: Record<string, { wins: number
           const b = breakdown[style]
           const Icon = STYLE_ICON[style]
           const winrate = b.n > 0 ? (b.wins / b.n) * 100 : 0
-          const totalR = b.total_r
+          const totalPct = b.total_pct
           const avgDur = b.avg_duration_ms
           return (
             <div key={style} className="px-3.5 py-3 flex items-center gap-3">
@@ -203,8 +244,8 @@ function BreakdownCard({ breakdown }: { breakdown: Record<string, { wins: number
                     <span className={winrate >= 50 ? 'text-emerald-400' : 'text-rose-400'}>
                       {winrate.toFixed(0)}% WR
                     </span>
-                    <span className={totalR >= 0 ? 'text-emerald-400' : 'text-rose-400'}>
-                      {totalR >= 0 ? '+' : ''}{totalR.toFixed(2)} R
+                    <span className={totalPct >= 0 ? 'text-emerald-400' : 'text-rose-400'}>
+                      {fmtPctSigned(totalPct)}
                     </span>
                   </div>
                 )}
@@ -217,10 +258,14 @@ function BreakdownCard({ breakdown }: { breakdown: Record<string, { wins: number
   )
 }
 
-function StatsCard({ stats }: { stats: PortfolioStats }) {
-  const closed = stats.closed_count
-  const winrate = stats.win_rate * 100
-  const totalR = stats.total_pnl_r
+function StatsCard({ pctStats, openCount, expired }: {
+  pctStats: { total_pct: number; avg_pct: number; avg_win: number; avg_loss: number; win_rate: number; n_closed: number; n_wins: number; n_losses: number }
+  openCount: number
+  expired: number
+}) {
+  const closed = pctStats.n_closed
+  const winrate = pctStats.win_rate * 100
+  const total = pctStats.total_pct
   const reliability =
     closed >= 30 ? { label: 'reliable', color: 'text-emerald-400' } :
     closed >= 10 ? { label: 'developing', color: 'text-amber-400' } :
@@ -230,32 +275,34 @@ function StatsCard({ stats }: { stats: PortfolioStats }) {
     <div>
       <div className="flex items-center justify-between mb-1.5 px-2">
         <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-widest">
-          Performance (real outcome)
+          Performance (% portfolio)
         </p>
         <p className="text-[10px] text-slate-500">
           <span className="font-mono">{closed}</span> trade · <span className={reliability.color}>{reliability.label}</span>
         </p>
       </div>
       <div className="bg-gradient-to-br from-slate-800/60 to-slate-900/60 rounded-2xl border border-slate-800 overflow-hidden">
-        {/* Hero KPI: total return — biggest, dominant */}
+        {/* Hero KPI: total return as % portfolio — biggest, dominant */}
         <div className="px-4 py-4 border-b border-slate-800/80">
           <p className="text-[10px] text-slate-500 uppercase tracking-wide font-semibold">Total return</p>
           <p className={cn(
             'text-3xl font-black tabular-nums leading-none mt-1',
-            totalR > 0 ? 'text-emerald-300' : totalR < 0 ? 'text-rose-300' : 'text-slate-400',
+            total > 0 ? 'text-emerald-300' : total < 0 ? 'text-rose-300' : 'text-slate-400',
           )}>
-            {totalR >= 0 ? '+' : ''}{totalR.toFixed(2)} R
+            {fmtPctSigned(total)}
           </p>
           <p className="text-[11px] text-slate-500 mt-1">
-            avg {stats.avg_pnl_r >= 0 ? '+' : ''}{stats.avg_pnl_r.toFixed(2)} R/trade · win rate {winrate.toFixed(1)}%
+            avg {fmtPctSigned(pctStats.avg_pct)}/trade · win rate {winrate.toFixed(1)}%
           </p>
         </div>
         {/* Sub stats grid */}
         <div className="grid grid-cols-3 gap-px bg-slate-800/60">
-          <Cell label="Wins"  value={`${stats.wins}`}   tone="ok"   sub={`avg +${stats.avg_win_r.toFixed(2)} R`} />
-          <Cell label="Losses" value={`${stats.losses}`} tone="bad" sub={`avg ${stats.avg_loss_r.toFixed(2)} R`} />
-          <Cell label="Open"   value={`${stats.open_count}`} tone="neutral"
-                sub={stats.expired > 0 ? `${stats.expired} expired` : 'tracking'} />
+          <Cell label="Wins"  value={`${pctStats.n_wins}`}   tone="ok"
+                sub={`avg ${fmtPctSigned(pctStats.avg_win)}`} />
+          <Cell label="Losses" value={`${pctStats.n_losses}`} tone="bad"
+                sub={`avg ${fmtPctSigned(pctStats.avg_loss)}`} />
+          <Cell label="Open"   value={`${openCount}`} tone="neutral"
+                sub={expired > 0 ? `${expired} expired` : 'tracking'} />
         </div>
       </div>
     </div>
@@ -285,7 +332,7 @@ function TradeRow({ trade, live, xauPrice }: { trade: ActiveTrade; live?: boolea
     tone === 'loss' ? 'bg-rose-700/30 text-rose-200 border-rose-700/40' :
     tone === 'open' ? 'bg-sky-700/30 text-sky-200 border-sky-700/40' :
                       'bg-slate-700/30 text-slate-300 border-slate-700/40'
-  const pnlR = trade.pnl_r ?? 0
+  const pnlPct = pctFromR(trade.pnl_r, trade.risk_pct)
 
   // Duration: how long trade was/has been open
   const opened = new Date(trade.opened_at).getTime()
@@ -323,8 +370,8 @@ function TradeRow({ trade, live, xauPrice }: { trade: ActiveTrade; live?: boolea
           </span>
           {!live && trade.pnl_r !== null && (
             <p className={cn('text-xs font-mono font-bold tabular-nums mt-1',
-              pnlR >= 0 ? 'text-emerald-300' : 'text-rose-300')}>
-              {pnlR >= 0 ? '+' : ''}{pnlR.toFixed(2)} R
+              pnlPct >= 0 ? 'text-emerald-300' : 'text-rose-300')}>
+              {fmtPctSigned(pnlPct)}
             </p>
           )}
         </div>
@@ -352,21 +399,36 @@ function TradeRow({ trade, live, xauPrice }: { trade: ActiveTrade; live?: boolea
         </span>
       </div>
 
-      {/* Price-level chart — gives instant context: where is price now relative
-          to entry/SL/TPs? Live trades show current spot dot, closed trades show
-          exit price. Renders as a horizontal axis with markers and labeled zones. */}
-      <PriceLevelChart trade={trade} live={live} xauPrice={xauPrice ?? null} />
+      {/* Time-series chart — actual price action between opened_at..now/closed_at,
+          with horizontal lines for entry/SL/TP1/TP2 and dots at entry/exit. */}
+      <TradeChart trade={trade} live={live} xauPrice={xauPrice ?? null} />
     </div>
   )
 }
 
-/** Horizontal price-level visualisation per trade.
- *  - LONG: SL (left, red) → Entry → Now → TP1 → TP2 (right, green)
- *  - SHORT: mirrored — TP2 left, SL right
- *  Marker positions interpolate linearly between min/max levels.
- *  For closed trades, the "Now" dot is replaced by exit_price.
+interface Bar { t: number; o: number | null; h: number | null; l: number | null; c: number | null }
+
+/** Picks Yahoo interval based on trade duration:
+ *    < 6h    → 5m
+ *    < 24h   → 15m
+ *    < 7d    → 1h
+ *    >= 7d   → 1d
  */
-function PriceLevelChart({
+function pickInterval(durationMs: number): string {
+  if (durationMs < 6 * 3600_000)   return '5m'
+  if (durationMs < 24 * 3600_000)  return '15m'
+  if (durationMs < 7 * 86400_000)  return '1h'
+  return '1d'
+}
+
+/**
+ * Time-series chart per trade. Fetches XAU/USD bars between opened_at and
+ * closed_at (or now for OPEN trades) from /api/chart/xau (Yahoo proxy).
+ * Draws SVG line + horizontal markers for entry/SL/TP1/TP2 + entry/exit dots.
+ *
+ * Live trades: re-fetch every 60s while card visible. Closed trades: fetch once.
+ */
+function TradeChart({
   trade, live, xauPrice,
 }: {
   trade: ActiveTrade; live?: boolean; xauPrice: number | null
@@ -377,105 +439,173 @@ function PriceLevelChart({
   const tp2   = trade.tp2 ? Number(trade.tp2) : null
   if (!isFinite(entry) || !isFinite(sl)) return null
 
-  // "Now" — live spot for OPEN trades, exit_price for closed trades.
-  const now = live
-    ? (xauPrice ?? (trade.high_after_open !== null ? Number(trade.high_after_open) : entry))
-    : (trade.exit_price !== null ? Number(trade.exit_price) : entry)
+  const fromIso = trade.opened_at
+  const toIso   = live ? new Date().toISOString() : (trade.closed_at ?? new Date().toISOString())
+  const durationMs = new Date(toIso).getTime() - new Date(fromIso).getTime()
+  const interval = pickInterval(durationMs)
+
+  const [bars, setBars]       = useState<Bar[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError]     = useState<string | null>(null)
+
+  useEffect(() => {
+    let abort = false
+    const load = async () => {
+      try {
+        const u = `/api/chart/xau?from=${encodeURIComponent(fromIso)}&to=${encodeURIComponent(toIso)}&interval=${interval}`
+        const r = await fetch(u, { cache: 'no-store' })
+        const j = await r.json()
+        if (abort) return
+        if (j.ok && Array.isArray(j.bars)) {
+          setBars(j.bars)
+          setError(null)
+        } else {
+          setError(j.error || 'no data')
+        }
+      } catch (e) {
+        if (!abort) setError(String(e))
+      } finally {
+        if (!abort) setLoading(false)
+      }
+    }
+    load()
+    // Live trades: re-poll every 60s
+    const iv = live ? setInterval(load, 60_000) : null
+    return () => { abort = true; if (iv) clearInterval(iv) }
+  }, [fromIso, toIso, interval, live])
+
+  // SVG dimensions
+  const W = 320, H = 80, PAD_X = 4, PAD_Y = 6
+
+  // Build full price extent: levels + bar highs/lows + current spot
+  const closes = bars.map(b => b.c).filter((v): v is number => typeof v === 'number')
+  const highs  = bars.map(b => b.h).filter((v): v is number => typeof v === 'number')
+  const lows   = bars.map(b => b.l).filter((v): v is number => typeof v === 'number')
+  const last   = closes.length > 0 ? closes[closes.length - 1] : null
+  const nowVal = live ? (xauPrice ?? last ?? entry) : (trade.exit_price !== null ? Number(trade.exit_price) : (last ?? entry))
+
+  const allP: number[] = [entry, sl, ...(tp1 ? [tp1] : []), ...(tp2 ? [tp2] : []), nowVal, ...highs, ...lows]
+  const pMin = Math.min(...allP)
+  const pMax = Math.max(...allP)
+  const pRange = pMax - pMin || 1
+
+  const yOf = (price: number) => PAD_Y + (1 - (price - pMin) / pRange) * (H - 2 * PAD_Y)
+
+  // Time extent: pad with same +/- 30min as the API does so markers align
+  const t0 = new Date(fromIso).getTime() - 30 * 60_000
+  const t1 = new Date(toIso).getTime()   + 30 * 60_000
+  const tRange = t1 - t0 || 1
+  const xOf = (t: number) => PAD_X + ((t - t0) / tRange) * (W - 2 * PAD_X)
+
+  // Build polyline path
+  const path = bars.length > 1
+    ? bars.map((b, i) => `${i === 0 ? 'M' : 'L'} ${xOf(b.t).toFixed(1)} ${yOf((b.c as number) ?? entry).toFixed(1)}`).join(' ')
+    : ''
 
   const isLong = trade.side === 'LONG'
-  // Build axis: lowest = SL (LONG) or TP2 (SHORT); highest opposite.
-  const allLevels = [sl, entry, now, ...(tp1 ? [tp1] : []), ...(tp2 ? [tp2] : [])]
-  const min = Math.min(...allLevels)
-  const max = Math.max(...allLevels)
-  const range = max - min || 1
-  const pct = (v: number) => ((v - min) / range) * 100
-
-  // Color the bar: red zone (loss side of entry) → green zone (profit side).
-  // For LONG: red below entry, green above. For SHORT: opposite.
-  const entryPct = pct(entry)
-  const slPct    = pct(sl)
-  const nowPct   = pct(now)
-  const tp1Pct   = tp1 ? pct(tp1) : null
-  const tp2Pct   = tp2 ? pct(tp2) : null
-
-  // PnL relative to original SL distance for status label
   const slDist = Math.abs(entry - sl)
-  const r = slDist > 0
-    ? (isLong ? (now - entry) / slDist : (entry - now) / slDist)
+  const rNow = slDist > 0
+    ? (isLong ? (nowVal - entry) / slDist : (entry - nowVal) / slDist)
     : 0
-  const rClass = r > 0 ? 'text-emerald-300' : r < 0 ? 'text-rose-300' : 'text-slate-400'
+  // Convert R-now to portfolio % using trade's actual risk_pct (fallback 1%)
+  const pctNow = pctFromR(rNow, trade.risk_pct)
+  const rClass = pctNow > 0 ? 'text-emerald-300' : pctNow < 0 ? 'text-rose-300' : 'text-slate-400'
+
+  // Marker x positions
+  const xEntry = xOf(new Date(fromIso).getTime())
+  const xExit  = xOf(new Date(toIso).getTime())
+  const xNow   = live ? xOf(Date.now()) : xExit
 
   return (
     <div className="mt-2.5">
-      {/* Bar */}
-      <div className="relative h-7 bg-slate-900/40 rounded border border-slate-800">
-        {/* Profit zone shading (entry → TPs side) */}
-        <div
-          className={cn(
-            'absolute top-0 bottom-0 rounded',
-            isLong ? 'bg-emerald-500/10' : 'bg-emerald-500/10',
+      {loading && bars.length === 0 ? (
+        <div className="h-20 flex items-center justify-center text-[10px] text-slate-500">
+          loading chart...
+        </div>
+      ) : error && bars.length === 0 ? (
+        <div className="h-20 flex items-center justify-center text-[10px] text-rose-400">
+          chart unavailable: {error.slice(0, 40)}
+        </div>
+      ) : (
+        <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-20" preserveAspectRatio="none">
+          {/* Profit / loss zones — green above entry for LONG, below for SHORT */}
+          <rect
+            x={0} width={W}
+            y={isLong ? PAD_Y : yOf(entry)}
+            height={isLong ? Math.max(0, yOf(entry) - PAD_Y) : Math.max(0, H - PAD_Y - yOf(entry))}
+            fill="rgba(16,185,129,0.07)"
+          />
+          <rect
+            x={0} width={W}
+            y={isLong ? yOf(entry) : PAD_Y}
+            height={isLong ? Math.max(0, H - PAD_Y - yOf(entry)) : Math.max(0, yOf(entry) - PAD_Y)}
+            fill="rgba(244,63,94,0.06)"
+          />
+
+          {/* Horizontal level lines */}
+          <Line y={yOf(sl)}    color="rgba(244,63,94,0.7)"   width={W} dash />
+          <Line y={yOf(entry)} color="rgba(226,232,240,0.6)" width={W} />
+          {tp1 !== null && <Line y={yOf(tp1)} color="rgba(16,185,129,0.6)" width={W} dash />}
+          {tp2 !== null && <Line y={yOf(tp2)} color="rgba(34,197,94,0.5)"  width={W} dash />}
+
+          {/* Vertical time markers: entry, exit (closed only) */}
+          <line x1={xEntry} x2={xEntry} y1={PAD_Y} y2={H - PAD_Y}
+                stroke="rgba(148,163,184,0.4)" strokeDasharray="2,2" strokeWidth={0.7} />
+          {!live && (
+            <line x1={xExit} x2={xExit} y1={PAD_Y} y2={H - PAD_Y}
+                  stroke="rgba(148,163,184,0.4)" strokeDasharray="2,2" strokeWidth={0.7} />
           )}
-          style={
-            isLong
-              ? { left: `${entryPct}%`, right: 0 }
-              : { right: `${100 - entryPct}%`, left: 0 }
-          }
-        />
-        {/* Loss zone shading (entry → SL side) */}
-        <div
-          className={cn('absolute top-0 bottom-0 rounded bg-rose-500/10')}
-          style={
-            isLong
-              ? { left: 0, right: `${100 - entryPct}%` }
-              : { left: `${entryPct}%`, right: 0 }
-          }
-        />
 
-        {/* SL marker */}
-        <Marker pct={slPct} color="bg-rose-500"  label="SL"  fmtV={fmtPrice(sl)} />
-        {/* Entry marker */}
-        <Marker pct={entryPct} color="bg-slate-300" label="Entry" fmtV={fmtPrice(entry)} thicker />
-        {/* TP markers */}
-        {tp1Pct !== null && tp1 && <Marker pct={tp1Pct} color="bg-emerald-500" label="TP1" fmtV={fmtPrice(tp1)} />}
-        {tp2Pct !== null && tp2 && <Marker pct={tp2Pct} color="bg-emerald-400" label="TP2" fmtV={fmtPrice(tp2)} />}
+          {/* Price line */}
+          {path && <path d={path} fill="none" stroke="rgba(56,189,248,0.95)" strokeWidth={1.2} strokeLinejoin="round" />}
 
-        {/* Current price / exit dot */}
-        <div
-          className={cn(
-            'absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-2.5 h-2.5 rounded-full ring-2 ring-slate-950 z-10',
-            live ? (r > 0 ? 'bg-emerald-300' : r < 0 ? 'bg-rose-300' : 'bg-amber-300')
-                 : (r > 0 ? 'bg-emerald-400' : 'bg-rose-400'),
-          )}
-          style={{ left: `${nowPct}%` }}
-          title={live ? `Now ${fmtPrice(now)}` : `Exit ${fmtPrice(now)}`}
-        />
-      </div>
+          {/* Entry dot */}
+          <circle cx={xEntry} cy={yOf(entry)} r={3}
+                  fill={isLong ? '#22c55e' : '#f43f5e'}
+                  stroke="#020617" strokeWidth={1.2} />
 
-      {/* Status row beneath bar */}
-      <div className="mt-1 flex items-center justify-between text-[9px] text-slate-500 font-mono px-0.5">
-        <span>{isLong ? `SL ${fmtPrice(sl)}` : `TP2 ${tp2 ? fmtPrice(tp2) : '-'}`}</span>
-        <span className={rClass}>
-          {live ? 'Now' : 'Exit'} {fmtPrice(now)} ({r >= 0 ? '+' : ''}{r.toFixed(2)} R)
+          {/* Now / Exit dot */}
+          <circle cx={xNow} cy={yOf(nowVal)} r={3.5}
+                  fill={rNow > 0 ? '#34d399' : rNow < 0 ? '#fb7185' : '#fbbf24'}
+                  stroke="#020617" strokeWidth={1.4} />
+
+          {/* Level labels (right edge) */}
+          <PriceLabel y={yOf(sl)}    text={`SL ${fmtPrice(sl)}`}    color="#fb7185" />
+          <PriceLabel y={yOf(entry)} text={`E ${fmtPrice(entry)}`}  color="#cbd5e1" />
+          {tp1 !== null && <PriceLabel y={yOf(tp1)} text={`TP1 ${fmtPrice(tp1)}`} color="#34d399" />}
+          {tp2 !== null && <PriceLabel y={yOf(tp2)} text={`TP2 ${fmtPrice(tp2)}`} color="#22c55e" />}
+        </svg>
+      )}
+
+      {/* Footer status: real spot + portfolio % */}
+      <div className="mt-1 flex items-center justify-between text-[10px] font-mono">
+        <span className="text-slate-500">
+          XAU <span className="text-slate-300">{fmtPrice(nowVal)}</span>
         </span>
-        <span>{isLong ? `TP2 ${tp2 ? fmtPrice(tp2) : '-'}` : `SL ${fmtPrice(sl)}`}</span>
+        <span className={cn(rClass, 'font-bold')}>
+          {live ? 'Now' : 'Exit'} {fmtPctSigned(pctNow)}
+        </span>
+        <span className="text-slate-500">
+          {bars.length > 0 ? `${bars.length} bar ${interval}` : '—'}
+        </span>
       </div>
     </div>
   )
 }
 
-function Marker({
-  pct, color, label, fmtV, thicker,
-}: {
-  pct: number; color: string; label: string; fmtV: string; thicker?: boolean
-}) {
+function Line({ y, color, width, dash }: { y: number; color: string; width: number; dash?: boolean }) {
   return (
-    <div
-      className="absolute top-0 bottom-0 -translate-x-1/2 group"
-      style={{ left: `${pct}%` }}
-      title={`${label} ${fmtV}`}
-    >
-      <div className={cn('h-full', color, thicker ? 'w-[2px]' : 'w-px')} />
-    </div>
+    <line x1={0} x2={width} y1={y} y2={y}
+          stroke={color} strokeWidth={1}
+          strokeDasharray={dash ? '3,3' : undefined} />
+  )
+}
+
+function PriceLabel({ y, text, color }: { y: number; text: string; color: string }) {
+  return (
+    <text x={4} y={y - 2} fill={color} fontSize={8} fontFamily="monospace" opacity={0.85}>
+      {text}
+    </text>
   )
 }
 

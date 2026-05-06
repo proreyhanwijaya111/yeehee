@@ -89,15 +89,13 @@ def run_once(store: SettingsStore, settings: dict, log=print, trigger_reason: st
     sig_intraday = intraday.generate(_ctx(df_15m, df_4h))
     sig_swing    = swing.generate(_ctx(df_4h, df_1d))
 
-    # ── Block new signal per-style if there's already an OPEN trade ───────────
-    # User feedback: confusing to see "Scalper BELI 82%" while a previous
-    # scalper trade is still running. Force the signal to FLAT with a reason
-    # the UI can display ("Trade running, tunggu hasil"). Does NOT affect the
-    # other styles — scalper running won't block intraday or swing.
-    open_styles = _get_open_styles(store, user_id=settings.get("user_id", "default"))
-    sig_scalper  = _block_if_running(sig_scalper,  "scalper",  open_styles)
-    sig_intraday = _block_if_running(sig_intraday, "intraday", open_styles)
-    sig_swing    = _block_if_running(sig_swing,    "swing",    open_styles)
+    # NOTE: signals are NEVER suppressed — Home/Sinyal page must always show
+    # the latest analysis so the user (or family doing manual execution) can
+    # see what the system thinks NOW. Trade-running de-duplication happens at
+    # the trade-tracker layer (open_trade_if_eligible has UNIQUE INDEX per
+    # style, so a 2nd OPEN trade for the same style is rejected without
+    # affecting the displayed signal). Portfolio page is where users see the
+    # status of their currently-open trade.
 
     # ── RCS composite reference indicator ─────────────────────────────────────
     # Computes single composite score [-1, +1] from existing features as
@@ -379,44 +377,3 @@ def _rule_debate_dict(df, df_htf, inter, cot, sess, in_blk, blk_evt) -> dict:
     return out
 
 
-def _get_open_styles(store, user_id: str = "default") -> dict:
-    """Return {style: trade_info} for styles with an OPEN trade right now.
-
-    Used to suppress new signals while a previous trade is still running so the
-    UI doesn't show contradictory "BELI 80%" while existing scalper LONG hasn't
-    closed. Result also drives the open_styles bundle field which the UI uses
-    to render "Trade running" badge.
-    """
-    if not store or not getattr(store, "has_db", False):
-        return {}
-    try:
-        r = (
-            store._client.from_("active_trades")
-            .select("style,id,side,opened_at,confidence,entry,sl,tp1")
-            .eq("user_id", user_id)
-            .eq("status", "OPEN")
-            .execute()
-        )
-        return {row["style"]: row for row in (r.data or [])}
-    except Exception:
-        return {}
-
-
-def _block_if_running(sig, style: str, open_styles: dict):
-    """If `style` has OPEN trade, force `sig` to FLAT with a human-readable reason.
-
-    Mutates and returns the same Signal object for chainability.
-    """
-    info = open_styles.get(style)
-    if not info:
-        return sig
-    sig.side = "FLAT"
-    sig.confidence = 0.0
-    sig.confluence_count = 0
-    opened_short = (info.get("opened_at") or "")[:16].replace("T", " ")
-    trade_id     = str(info.get("id") or "")[:8]
-    side         = info.get("side") or "?"
-    reason = f"Trade {style} {side} sedang OPEN (id {trade_id}, sejak {opened_short}Z) — tunggu hasil dulu."
-    sig.reasons = [reason]
-    sig.risks = []
-    return sig
