@@ -81,35 +81,9 @@ const STATUS_TONE: Record<TradeStatus, 'open' | 'win' | 'loss' | 'neutral'> = {
 }
 
 export default function PortfolioClient({ openTrades, closedTrades, stats, xauPrice }: Props) {
-  const [filter, setFilter]   = useState<StyleFilter>('all')
-  const [range,  setRange]    = useState<RangeFilter>('recent')
-  const [resetting, setResetting] = useState<null | 'open' | 'all'>(null)
+  const [filter, setFilter] = useState<StyleFilter>('all')
+  const [range,  setRange]  = useState<RangeFilter>('recent')
   const router = useRouter()
-
-  const handleReset = async (scope: 'open' | 'all') => {
-    const msg = scope === 'all'
-      ? 'Hapus SEMUA trade history (open + closed)? Gak bisa di-undo.'
-      : 'Tutup semua trade yang masih OPEN sebagai MANUAL close (pnl=0)?'
-    if (!confirm(msg)) return
-    setResetting(scope)
-    try {
-      const r = await fetch('/api/portfolio/reset', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scope }),
-      })
-      const j = await r.json().catch(() => ({}))
-      if (!r.ok || !j.ok) {
-        alert(`Reset gagal: ${j.error || r.statusText}`)
-      } else {
-        router.refresh()
-      }
-    } catch (e) {
-      alert(`Reset error: ${String(e)}`)
-    } finally {
-      setResetting(null)
-    }
-  }
 
   // Filter both lists by style
   const filteredOpen      = filter === 'all' ? openTrades   : openTrades.filter(t => t.style === filter)
@@ -189,7 +163,7 @@ export default function PortfolioClient({ openTrades, closedTrades, stats, xauPr
           <h1 className="text-lg font-black text-slate-100 leading-tight">Portfolio</h1>
           <p className="text-[11px] text-slate-500">Active trades + history · win rate real dari outcome.</p>
         </div>
-        <ResetMenu onReset={handleReset} busy={resetting} />
+        <RefreshButton onRefresh={() => router.refresh()} />
       </header>
 
       <div className="space-y-5">
@@ -742,42 +716,22 @@ function PriceLabel({ y, text, color }: { y: number; text: string; color: string
   )
 }
 
-function ResetMenu({ onReset, busy }: { onReset: (scope: 'open' | 'all') => void; busy: null | 'open' | 'all' }) {
-  const [open, setOpen] = useState(false)
+function RefreshButton({ onRefresh }: { onRefresh: () => void }) {
+  const [spinning, setSpinning] = useState(false)
+  const handle = () => {
+    setSpinning(true)
+    onRefresh()
+    setTimeout(() => setSpinning(false), 800)
+  }
   return (
-    <div className="relative">
-      <button
-        onClick={() => setOpen(v => !v)}
-        className="p-1.5 hover:bg-slate-800 rounded-lg text-slate-400"
-        aria-label="Reset portfolio"
-        disabled={busy !== null}
-      >
-        {busy ? <Loader2 size={16} className="animate-spin" /> : <RotateCcw size={16} />}
-      </button>
-      {open && (
-        <>
-          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 top-full mt-1 w-56 bg-slate-900 border border-slate-700 rounded-xl shadow-xl z-50 overflow-hidden">
-            <button
-              onClick={() => { setOpen(false); onReset('open') }}
-              className="w-full text-left px-3 py-2.5 text-[11px] text-slate-200 hover:bg-slate-800 border-b border-slate-800"
-              disabled={busy !== null}
-            >
-              <div className="font-semibold">Tutup semua OPEN</div>
-              <div className="text-[10px] text-slate-500 leading-tight">Mark MANUAL close, pnl=0</div>
-            </button>
-            <button
-              onClick={() => { setOpen(false); onReset('all') }}
-              className="w-full text-left px-3 py-2.5 text-[11px] text-rose-200 hover:bg-rose-900/30"
-              disabled={busy !== null}
-            >
-              <div className="font-semibold">Hapus SEMUA history</div>
-              <div className="text-[10px] text-slate-500 leading-tight">Clean slate. Tidak bisa undo.</div>
-            </button>
-          </div>
-        </>
-      )}
-    </div>
+    <button
+      onClick={handle}
+      className="p-1.5 hover:bg-slate-800 rounded-lg text-slate-400"
+      aria-label="Refresh data"
+      title="Refresh data"
+    >
+      <RotateCcw size={16} className={spinning ? 'animate-spin' : ''} />
+    </button>
   )
 }
 

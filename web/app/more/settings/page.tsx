@@ -2,7 +2,7 @@
 import Link from 'next/link'
 import { useEffect, useState } from 'react'
 import {
-  ArrowLeft, Cpu, Brain, Server, Send, Sliders, ChevronRight, Bell,
+  ArrowLeft, Cpu, Brain, Server, Send, Sliders, ChevronRight, Bell, Briefcase,
 } from 'lucide-react'
 import {
   getAppSettings,
@@ -121,6 +121,12 @@ export default function SettingsHubPage() {
               icon={<Sliders size={16} />}
               label="Refresh & timeframe"
               sub={`${settings?.refresh_interval_minutes}min · ${settings?.timezone} · focus: ${settings?.timeframe_focus}`}
+            />
+            <Row
+              href="/more/settings/portfolio"
+              icon={<Briefcase size={16} />}
+              label="Manajemen Portfolio"
+              sub="Tutup semua OPEN trade · hapus history (clean slate)"
             />
           </Group>
 
