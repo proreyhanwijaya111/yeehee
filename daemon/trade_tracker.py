@@ -474,9 +474,12 @@ def _evaluate_trade(trade: dict, df_5m: pd.DataFrame, now: datetime) -> Optional
 
     # Filter df_5m to bars at or after last_check
     candles = df_5m[df_5m.index >= last_check_dt]
-    if len(candles) == 0:
-        # No new bars yet, but check expiry
-        return _check_expiry(trade, now, df_5m)
+    # NOTE: do NOT early-return here when candles is empty. yfinance sometimes
+    # returns no new 5m bar between cycles (data lag, weekend gap, etc.). The
+    # stored high_after_open/low_after_open already reflects past peaks, and
+    # the LATEST bar's close is the freshest spot price we have. Both must be
+    # considered for trailing SL on every cycle, otherwise SL stays stuck at
+    # original even when price has clearly moved past TP1/TP2.
 
     upd = TradeUpdate(
         hit_tp1=hit_tp1, hit_tp2=hit_tp2, hit_tp3=hit_tp3,
@@ -485,13 +488,30 @@ def _evaluate_trade(trade: dict, df_5m: pd.DataFrame, now: datetime) -> Optional
     # Working copy of SL — may be moved to entry (BEP) or TP1 (lock) within this loop.
     cur_sl = sl
 
-    # Apply trailing SL based on highest excursion BEFORE iterating new candles.
-    # This catches any progress made between cycles + retroactive backfill for
-    # trades opened before this logic existed (they get the new safety net too).
+    # Augment high_after_open / low_after_open with the LATEST close (in case
+    # the stored values are stale and the latest close is more extreme).
+    if df_5m is not None and len(df_5m) > 0:
+        latest_close = float(df_5m.iloc[-1]["close"])
+        latest_high  = float(df_5m.iloc[-1]["high"]) if "high" in df_5m.columns else latest_close
+        latest_low   = float(df_5m.iloc[-1]["low"])  if "low"  in df_5m.columns else latest_close
+        upd.high_after_open = max(upd.high_after_open or latest_high, latest_high, latest_close)
+        upd.low_after_open  = min(upd.low_after_open  or latest_low,  latest_low,  latest_close)
+        # Also flag TP hits if latest bar is at or past TP levels (was missed
+        # if last_check_at > bar.timestamp due to clock skew)
+        if side == "LONG":
+            if tp1 > 0 and upd.high_after_open >= tp1: upd.hit_tp1 = True
+            if tp2 > 0 and upd.high_after_open >= tp2: upd.hit_tp2 = True
+        else:
+            if tp1 > 0 and upd.low_after_open  <= tp1: upd.hit_tp1 = True
+            if tp2 > 0 and upd.low_after_open  <= tp2: upd.hit_tp2 = True
+
+    # Apply trailing SL based on (possibly augmented) highest excursion.
     if side == "LONG":
-        new_sl = _trail_sl_long(entry, original_sl, tp1, tp2, tp3, high_after, cur_sl)
+        new_sl = _trail_sl_long(entry, original_sl, tp1, tp2, tp3,
+                                  upd.high_after_open, cur_sl)
     else:
-        new_sl = _trail_sl_short(entry, original_sl, tp1, tp2, tp3, low_after, cur_sl)
+        new_sl = _trail_sl_short(entry, original_sl, tp1, tp2, tp3,
+                                   upd.low_after_open, cur_sl)
     if new_sl != cur_sl:
         cur_sl = new_sl
         upd.sl_new = cur_sl
