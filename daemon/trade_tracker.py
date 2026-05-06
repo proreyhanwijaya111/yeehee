@@ -381,16 +381,67 @@ def update_open_trades(store, df_5m: pd.DataFrame, log=print) -> int:
     return modified
 
 
+def _trail_sl_long(entry: float, original_sl: float, tp1: float, tp2: float,
+                   tp3: float, high: float, current_sl: float) -> float:
+    """Stepped trailing stop for LONG. SL only ever moves UP (toward profit).
+
+    Steps (each milestone locks more profit, never reverses):
+        high < 50% TP1:    SL = current (typically original)
+        high ≥ 50% TP1:    SL = entry             (BEP, locks 0R minimum)
+        high ≥ TP1:        SL = halfway(E, TP1)   (+0.5R locked)
+        high ≥ TP2:        SL = TP1               (+1R locked)
+        high ≥ 50% TP2-3:  SL = halfway(TP1, TP2) (+1.5R locked)
+        high ≥ TP3:        close at TP3 (+full R) — handled separately
+    """
+    new_sl = current_sl
+    if high <= entry or tp1 <= entry:
+        return new_sl
+
+    half_tp1 = entry + 0.5 * (tp1 - entry)
+    if high >= half_tp1:
+        new_sl = max(new_sl, entry)                       # BEP
+    if high >= tp1:
+        new_sl = max(new_sl, entry + 0.5 * (tp1 - entry)) # +0.5R
+    if tp2 > 0 and high >= tp2:
+        new_sl = max(new_sl, tp1)                         # +1R lock TP1
+    if tp2 > 0 and tp3 > 0:
+        half_tp23 = tp2 + 0.5 * (tp3 - tp2)
+        if high >= half_tp23:
+            new_sl = max(new_sl, tp1 + 0.5 * (tp2 - tp1)) # +1.5R
+    return new_sl
+
+
+def _trail_sl_short(entry: float, original_sl: float, tp1: float, tp2: float,
+                    tp3: float, low: float, current_sl: float) -> float:
+    """Mirror of _trail_sl_long. For SHORT, SL only ever moves DOWN."""
+    new_sl = current_sl
+    if low >= entry or tp1 >= entry:
+        return new_sl
+
+    half_tp1 = entry - 0.5 * (entry - tp1)
+    if low <= half_tp1:
+        new_sl = min(new_sl, entry)                       # BEP
+    if low <= tp1:
+        new_sl = min(new_sl, entry - 0.5 * (entry - tp1)) # +0.5R
+    if tp2 > 0 and low <= tp2:
+        new_sl = min(new_sl, tp1)                         # +1R lock TP1
+    if tp2 > 0 and tp3 > 0:
+        half_tp23 = tp2 - 0.5 * (tp2 - tp3)
+        if low <= half_tp23:
+            new_sl = min(new_sl, tp1 - 0.5 * (tp1 - tp2)) # +1.5R
+    return new_sl
+
+
 def _evaluate_trade(trade: dict, df_5m: pd.DataFrame, now: datetime) -> Optional[TradeUpdate]:
     """Decide what to update for this trade based on candles since last_check_at.
 
-    Migration 013 — BEP/lock-TP1 logic (mirror of EA v0.2.0):
-        TP1 hit  → SL moved to entry      (BEP, locks 0R minimum)
-        TP2 hit  → SL moved to TP1        (locks +1R minimum)
-        TP3 hit  → close at TP3           (full target +N R)
-        SL hit   → close at current SL.
-                   pnl_r = (exit - entry) / |entry - original_sl|
-                   so a BEP exit shows +0R; a lock-TP1 exit shows +1R.
+    User-aligned trailing SL (5-step stepped lock — see _trail_sl_long doc):
+        50% TP1 → SL = entry (BEP)
+        TP1 hit → SL = halfway(E, TP1) — +0.5R
+        TP2 hit → SL = TP1              — +1R
+        50% TP2-TP3 → SL = halfway(TP1, TP2) — +1.5R
+        TP3 hit → close at TP3 — +full R
+    Profit can never turn back to loss once 50% TP1 is reached.
     """
     side = trade["side"]
     sl   = float(trade["sl"])
@@ -434,22 +485,15 @@ def _evaluate_trade(trade: dict, df_5m: pd.DataFrame, now: datetime) -> Optional
     # Working copy of SL — may be moved to entry (BEP) or TP1 (lock) within this loop.
     cur_sl = sl
 
-    # Migration 013 retroactive backfill: trades opened BEFORE the BEP/lock-TP1
-    # logic was deployed may already have hit_tp1 / hit_tp2 flags set without
-    # ever moving SL. Apply the SL movement once now so they get the same
-    # safety net as new trades. (Without this, user's existing TP1✓TP2✓ trades
-    # would stay at original SL until SL or expiry.)
-    if hit_tp1 and (
-        (side == "LONG"  and cur_sl < entry) or
-        (side == "SHORT" and cur_sl > entry)
-    ):
-        cur_sl = entry
-        upd.sl_new = cur_sl
-    if hit_tp2 and tp1 > 0 and (
-        (side == "LONG"  and cur_sl < tp1) or
-        (side == "SHORT" and cur_sl > tp1)
-    ):
-        cur_sl = tp1
+    # Apply trailing SL based on highest excursion BEFORE iterating new candles.
+    # This catches any progress made between cycles + retroactive backfill for
+    # trades opened before this logic existed (they get the new safety net too).
+    if side == "LONG":
+        new_sl = _trail_sl_long(entry, original_sl, tp1, tp2, tp3, high_after, cur_sl)
+    else:
+        new_sl = _trail_sl_short(entry, original_sl, tp1, tp2, tp3, low_after, cur_sl)
+    if new_sl != cur_sl:
+        cur_sl = new_sl
         upd.sl_new = cur_sl
 
     closed_in_bar = False
@@ -465,13 +509,16 @@ def _evaluate_trade(trade: dict, df_5m: pd.DataFrame, now: datetime) -> Optional
                 upd.closed = True
                 upd.status = "SL"
                 upd.exit_price = cur_sl
-                upd.exit_reason = "sl_hit" if cur_sl <= original_sl else (
-                    "bep_hit" if cur_sl == entry else "lock_tp1_hit"
-                )
+                if cur_sl <= original_sl:
+                    upd.exit_reason = "sl_hit"
+                elif abs(cur_sl - entry) < 1e-6:
+                    upd.exit_reason = "bep_hit"
+                else:
+                    upd.exit_reason = "trailing_sl_hit"
                 upd.closed_at = ts.isoformat() if hasattr(ts, "isoformat") else now.isoformat()
                 upd.pnl_r = _r(cur_sl)
                 upd.pnl_pct = round((cur_sl - entry) / entry * 100, 4)
-                upd.hit_sl = (cur_sl <= original_sl)   # only flag full SL hit, not BEP exit
+                upd.hit_sl = (cur_sl <= original_sl)   # only flag full SL hit, not BEP/trailing exit
                 upd.sl_new = cur_sl if cur_sl != sl else None
                 closed_in_bar = True
                 break
@@ -487,26 +534,24 @@ def _evaluate_trade(trade: dict, df_5m: pd.DataFrame, now: datetime) -> Optional
                 upd.pnl_pct = round((tp3 - entry) / entry * 100, 4)
                 closed_in_bar = True
                 break
-            # Soft hits — flag + move SL (BEP/lock-TP1 in EA-aligned style).
-            if tp1 > 0 and h >= tp1 and not upd.hit_tp1:
-                upd.hit_tp1 = True
-                # Move SL to entry (BEP). cur_sl monotonically increases for LONG.
-                if cur_sl < entry:
-                    cur_sl = entry
-                    upd.sl_new = cur_sl
-            if tp2 > 0 and h >= tp2 and not upd.hit_tp2:
-                upd.hit_tp2 = True
-                # Lock-in TP1 (LONG: tp1 > entry, so cur_sl moves up further).
-                if tp1 > 0 and cur_sl < tp1:
-                    cur_sl = tp1
-                    upd.sl_new = cur_sl
+            # Flag TP hits + apply stepped trailing SL based on new high
+            if tp1 > 0 and h >= tp1: upd.hit_tp1 = True
+            if tp2 > 0 and h >= tp2: upd.hit_tp2 = True
+            new_sl = _trail_sl_long(entry, original_sl, tp1, tp2, tp3,
+                                     upd.high_after_open, cur_sl)
+            if new_sl != cur_sl:
+                cur_sl = new_sl
+                upd.sl_new = cur_sl
         else:
             # SHORT — mirrored. cur_sl monotonically decreases.
             if h >= cur_sl:
                 upd.closed = True; upd.status = "SL"; upd.exit_price = cur_sl
-                upd.exit_reason = "sl_hit" if cur_sl >= original_sl else (
-                    "bep_hit" if cur_sl == entry else "lock_tp1_hit"
-                )
+                if cur_sl >= original_sl:
+                    upd.exit_reason = "sl_hit"
+                elif abs(cur_sl - entry) < 1e-6:
+                    upd.exit_reason = "bep_hit"
+                else:
+                    upd.exit_reason = "trailing_sl_hit"
                 upd.closed_at = ts.isoformat() if hasattr(ts, "isoformat") else now.isoformat()
                 upd.pnl_r = _r(cur_sl)
                 upd.pnl_pct = round((entry - cur_sl) / entry * 100, 4)
@@ -523,16 +568,13 @@ def _evaluate_trade(trade: dict, df_5m: pd.DataFrame, now: datetime) -> Optional
                 upd.pnl_pct = round((entry - tp3) / entry * 100, 4)
                 closed_in_bar = True
                 break
-            if tp1 > 0 and l <= tp1 and not upd.hit_tp1:
-                upd.hit_tp1 = True
-                if cur_sl > entry:
-                    cur_sl = entry
-                    upd.sl_new = cur_sl
-            if tp2 > 0 and l <= tp2 and not upd.hit_tp2:
-                upd.hit_tp2 = True
-                if tp1 > 0 and cur_sl > tp1:
-                    cur_sl = tp1
-                    upd.sl_new = cur_sl
+            if tp1 > 0 and l <= tp1: upd.hit_tp1 = True
+            if tp2 > 0 and l <= tp2: upd.hit_tp2 = True
+            new_sl = _trail_sl_short(entry, original_sl, tp1, tp2, tp3,
+                                       upd.low_after_open, cur_sl)
+            if new_sl != cur_sl:
+                cur_sl = new_sl
+                upd.sl_new = cur_sl
 
     if closed_in_bar:
         return upd

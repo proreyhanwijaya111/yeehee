@@ -767,9 +767,8 @@ function timeAgoFuture(iso: string): string {
   }
 }
 
-/** Format ISO timestamp as "HH:MM" (today) or "DD/MM HH:MM" (other days), local TZ.
- *  Used for portfolio open/close labels so user sees exact time, not relative.
- *  Format default browser locale → matches HP system clock.
+/** Format ISO timestamp as "HH:MM" (today) or "DD MMM HH:MM" (other days), local TZ.
+ *  Always uses colon ':' separator (id-ID locale defaults to '.', confusing).
  */
 function formatTimeWIB(iso: string): string {
   if (!iso) return '–'
@@ -784,10 +783,15 @@ function formatTimeWIB(iso: string): string {
     const isYesterday = d.getDate() === yesterday.getDate()
                      && d.getMonth() === yesterday.getMonth()
                      && d.getFullYear() === yesterday.getFullYear()
-    const hhmm = d.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false })
+    const hh = String(d.getHours()).padStart(2, '0')
+    const mm = String(d.getMinutes()).padStart(2, '0')
+    const hhmm = `${hh}:${mm}`
     if (sameDay)     return hhmm
     if (isYesterday) return `kemarin ${hhmm}`
-    return d.toLocaleString('id-ID', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false })
+    const day = String(d.getDate()).padStart(2, '0')
+    const monthNames = ['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des']
+    const mon = monthNames[d.getMonth()]
+    return `${day} ${mon} ${hhmm}`
   } catch {
     return '–'
   }
