@@ -386,6 +386,54 @@ class SettingsStore:
 
 # ─── Public entry point ────────────────────────────────────────────────────────
 
+_FALLBACK_PROVIDERS = ["openrouter", "groq", "gemini", "anthropic", "openai"]
+
+
+def _select_llm_provider_chain(default_provider: str, router: "LLMRouter") -> list[tuple[str, str]]:
+    """Build provider/model fallback chain.
+
+    Order:
+      1. user-set default
+      2. other configured providers (env or supabase) in priority order
+      3. local providers (ollama, lmstudio) if configured
+
+    Each entry is (provider_key, default_model_for_that_provider).
+    Models are picked from the provider's known free/cheap default to avoid
+    surprise costs.
+    """
+    provider_default_models = {
+        "openrouter": "openai/gpt-oss-20b:free",
+        "groq":       "llama-3.1-8b-instant",
+        "gemini":     "gemini-1.5-flash",
+        "anthropic":  "claude-3-5-haiku-20241022",
+        "openai":     "gpt-4o-mini",
+        "ollama":     "llama3.1:8b",
+        "lmstudio":   "local-model",
+    }
+
+    chain: list[tuple[str, str]] = []
+    seen: set[str] = set()
+
+    def _add(prov: str):
+        if prov in seen:
+            return
+        if prov in ("ollama", "lmstudio"):
+            # Local providers don't need credential; trusted-by-availability
+            chain.append((prov, provider_default_models[prov]))
+            seen.add(prov)
+            return
+        if router.has_credential(prov):
+            chain.append((prov, provider_default_models.get(prov, "")))
+            seen.add(prov)
+
+    _add(default_provider)
+    for p in _FALLBACK_PROVIDERS:
+        _add(p)
+    for p in ("ollama", "lmstudio"):
+        _add(p)
+    return chain
+
+
 def run_llm_debate(
     market_ctx: dict,
     settings: dict,
@@ -393,48 +441,69 @@ def run_llm_debate(
     agent_configs: dict[str, AgentRunConfig],
     parallel: bool = True,
 ) -> dict:
-    """Run the 9-agent LLM pipeline. Returns dict compatible with DebateResult.to_dict()."""
+    """Run the 9-agent LLM pipeline with automatic provider fallback.
+
+    If the primary provider fails (rate limit, network error, invalid response),
+    the call retries with the next configured provider. Order:
+      1. settings.default_llm_provider (e.g. openrouter)
+      2. Other providers with API keys configured (groq, gemini, anthropic, openai)
+      3. Local providers (ollama, lmstudio) if reachable
+      4. Hard fallback: rule_engine (returned as error so caller can switch)
+    """
     router = LLMRouter()
     for prov, cred in provider_keys.items():
         router.set_credential(prov, api_key=cred.get("api_key"), base_url=cred.get("base_url"))
 
     default_provider = settings.get("default_llm_provider") or "openrouter"
-    default_model    = settings.get("default_llm_model")    or "openai/gpt-oss-20b:free"
+    user_model       = settings.get("default_llm_model")    or "openai/gpt-oss-20b:free"
 
-    # If no creds for default_provider and not local, fall back to rule
-    if default_provider not in ("ollama", "lmstudio") and not router.has_credential(default_provider):
-        return {"error": "no_credential", "provider": default_provider}
+    chain = _select_llm_provider_chain(default_provider, router)
+    if not chain:
+        return {"error": "no_credential", "provider": default_provider, "tried": []}
 
-    results = run_pipeline(
-        router=router,
-        agent_configs=agent_configs,
-        market_ctx=market_ctx,
-        default_provider=default_provider,
-        default_model=default_model,
-        parallel=parallel,
-    )
+    tried: list[dict] = []
+    for idx, (prov, default_model_for_provider) in enumerate(chain):
+        # First entry uses user-selected model; fallback uses provider's default model
+        model = user_model if idx == 0 else default_model_for_provider
+        try:
+            results = run_pipeline(
+                router=router,
+                agent_configs=agent_configs,
+                market_ctx=market_ctx,
+                default_provider=prov,
+                default_model=model,
+                parallel=parallel,
+            )
+            synth = synthesize(
+                results=results,
+                market_ctx=market_ctx,
+                router=router,
+                cfg=agent_configs.get("synthesizer", AgentRunConfig()),
+                default_provider=prov,
+                default_model=model,
+                use_llm=True,
+            )
+            return {
+                "final_action": synth.final_action,
+                "confidence":   synth.confidence,
+                "signal_strength": synth.signal_strength,
+                "primary_driver":  synth.primary_driver,
+                "reasoning_chain": synth.reasoning_chain,
+                "risks":           synth.risks,
+                "agents":          [{"name": v.name, "verdict": v.verdict, "confidence": v.confidence,
+                                      "reasoning": v.reasoning} for v in results.values()],
+                "engine":          "llm-9-agent",
+                "llm_provider":    prov,
+                "llm_model":       model,
+                "fallback_used":   idx > 0,
+                "fallback_chain":  [c[0] for c in chain],
+            }
+        except Exception as e:
+            tried.append({"provider": prov, "model": model, "error": str(e)[:200]})
+            print(f"[llm_debate] provider {prov} failed: {e!r} — trying next in chain")
+            continue
 
-    synth = synthesize(
-        results=results,
-        market_ctx=market_ctx,
-        router=router,
-        cfg=agent_configs.get("synthesizer", AgentRunConfig()),
-        default_provider=default_provider,
-        default_model=default_model,
-        use_llm=True,
-    )
-
-    return {
-        "final_action": synth.final_action,
-        "confidence":   synth.confidence,
-        "signal_strength": synth.signal_strength,
-        "primary_driver":  synth.primary_driver,
-        "reasoning_chain": synth.reasoning_chain,
-        "risks":           synth.risks,
-        "agents":          [{"name": v.name, "verdict": v.verdict, "confidence": v.confidence,
-                              "reasoning": v.reasoning} for v in results.values()],
-        "engine":          "llm-9-agent",
-    }
+    return {"error": "all_providers_failed", "tried": tried, "fallback_chain": [c[0] for c in chain]}
 
 
 def build_market_context(

@@ -44,6 +44,13 @@ from daemon.mira import MiraConsumer  # noqa: E402
 from daemon.heartbeat import push_heartbeat, VERSION  # noqa: E402
 from daemon.momentum_detector import MomentumWatcher, TriggerEvent  # noqa: E402
 
+# Telegram interactive bot (optional; only spawns thread if creds set).
+try:
+    from notify.telegram_bot import run_telegram_bot  # noqa: E402
+    TELEGRAM_BOT_AVAILABLE = True
+except Exception as _e:
+    TELEGRAM_BOT_AVAILABLE = False
+
 # Opsi B: poll cadence for the momentum watcher (seconds).
 # Twelve Data free tier = 800 req/day. 15s poll = 5,760 req/day → exceeds free.
 # Use 30s poll = 2,880 req/day → still over but with the price cache + yfinance
@@ -223,9 +230,17 @@ def main():
         threading.Thread(target=mira_loop,      args=(store,), name="mira-loop",      daemon=True),
         threading.Thread(target=heartbeat_loop, args=(store,), name="heartbeat-loop", daemon=True),
     ]
+    if TELEGRAM_BOT_AVAILABLE:
+        threads.append(threading.Thread(
+            target=run_telegram_bot,
+            args=(store,),
+            kwargs={"log": print, "shutdown_flag": _SHUTDOWN},
+            name="telegram-bot",
+            daemon=True,
+        ))
     for t in threads:
         t.start()
-    print("[boot] all loops started")
+    print(f"[boot] {len(threads)} loops started (telegram_bot={'on' if TELEGRAM_BOT_AVAILABLE else 'off'})")
 
     # Graceful shutdown on Ctrl+C
     def _handle_sigint(_sig, _frm):

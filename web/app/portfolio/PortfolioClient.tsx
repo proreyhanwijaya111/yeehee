@@ -12,6 +12,21 @@ import {
 import { fmtPrice, cn } from '@/lib/utils'
 
 type StyleFilter = 'all' | 'scalper' | 'intraday' | 'swing'
+type RangeFilter = 'recent' | '7d' | '30d' | 'all'
+
+const RANGE_LABELS: Record<RangeFilter, string> = {
+  recent: '5 terakhir',
+  '7d':   '7 hari',
+  '30d':  '30 hari',
+  all:    'Semua',
+}
+
+const RANGE_DAYS: Record<RangeFilter, number | null> = {
+  recent: null,
+  '7d':   7,
+  '30d':  30,
+  all:    null,
+}
 
 interface Props {
   openTrades:   ActiveTrade[]
@@ -23,6 +38,13 @@ interface Props {
 // Default risk per trade when trade.risk_pct is null (legacy pre-migration 004
 // rows). Profile "moderat" cap = 1.0% of equity. Used only as fallback.
 const DEFAULT_RISK_PCT = 0.01
+
+// Display assumption: starting capital $1,000. All percentages applied additively
+// to this base for the "modal awal → sekarang" display in StatsCard.
+const INITIAL_CAPITAL_USD = 1000
+
+const fmtUSD = (n: number) =>
+  `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 
 /** Convert pnl_r (R-unit) to portfolio % using each trade's actual risk_pct.
  *  e.g. 2R win at 1% risk = 2.00% portfolio gain.
@@ -59,7 +81,8 @@ const STATUS_TONE: Record<TradeStatus, 'open' | 'win' | 'loss' | 'neutral'> = {
 }
 
 export default function PortfolioClient({ openTrades, closedTrades, stats, xauPrice }: Props) {
-  const [filter, setFilter] = useState<StyleFilter>('all')
+  const [filter, setFilter]   = useState<StyleFilter>('all')
+  const [range,  setRange]    = useState<RangeFilter>('recent')
   const [resetting, setResetting] = useState<null | 'open' | 'all'>(null)
   const router = useRouter()
 
@@ -89,8 +112,22 @@ export default function PortfolioClient({ openTrades, closedTrades, stats, xauPr
   }
 
   // Filter both lists by style
-  const filteredOpen   = filter === 'all' ? openTrades   : openTrades.filter(t => t.style === filter)
-  const filteredClosed = filter === 'all' ? closedTrades : closedTrades.filter(t => t.style === filter)
+  const filteredOpen      = filter === 'all' ? openTrades   : openTrades.filter(t => t.style === filter)
+  const filteredClosedAll = filter === 'all' ? closedTrades : closedTrades.filter(t => t.style === filter)
+
+  // Apply range filter to closed trades. Recent = last 5, others time-based.
+  const filteredClosed = useMemo(() => {
+    if (range === 'recent') {
+      return filteredClosedAll.slice(0, 5)
+    }
+    const days = RANGE_DAYS[range]
+    if (days === null) return filteredClosedAll  // 'all'
+    const cutoff = Date.now() - days * 86400_000
+    return filteredClosedAll.filter(t => {
+      const ts = t.closed_at ? new Date(t.closed_at).getTime() : 0
+      return ts >= cutoff
+    })
+  }, [filteredClosedAll, range])
 
   // Per-style breakdown stats (pct-based) — pct uses trade.risk_pct per trade
   const breakdown = useMemo(() => {
@@ -202,10 +239,27 @@ export default function PortfolioClient({ openTrades, closedTrades, stats, xauPr
           </Group>
         )}
 
-        {filteredClosed.length > 0 && (
-          <Group title={`History (${filteredClosed.length})`}>
-            {filteredClosed.slice(0, 50).map(t => <TradeRow key={t.id} trade={t} />)}
-          </Group>
+        {/* History range filter — recent 5 / 7d / 30d / all */}
+        {filteredClosedAll.length > 0 && (
+          <div>
+            <div className="flex items-center justify-between mb-1.5 px-2">
+              <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-widest">
+                History ({filteredClosed.length}/{filteredClosedAll.length})
+              </p>
+              <select
+                value={range}
+                onChange={e => setRange(e.target.value as RangeFilter)}
+                className="text-[10px] bg-slate-800 border border-slate-700 text-slate-200 rounded px-1.5 py-0.5"
+              >
+                {(Object.keys(RANGE_LABELS) as RangeFilter[]).map(r => (
+                  <option key={r} value={r}>{RANGE_LABELS[r]}</option>
+                ))}
+              </select>
+            </div>
+            <div className="bg-slate-800/40 rounded-2xl border border-slate-800 overflow-hidden divide-y divide-slate-800/80">
+              {filteredClosed.map(t => <TradeRow key={t.id} trade={t} xauPrice={xauPrice} />)}
+            </div>
+          </div>
         )}
       </div>
     </main>
@@ -295,6 +349,35 @@ function StatsCard({ pctStats, openCount, expired }: {
             avg {fmtPctSigned(pctStats.avg_pct)}/trade · win rate {winrate.toFixed(1)}%
           </p>
         </div>
+
+        {/* Modal simulation panel — concrete dollar growth */}
+        {(() => {
+          const ending = INITIAL_CAPITAL_USD * (1 + total / 100)
+          const delta  = ending - INITIAL_CAPITAL_USD
+          const dColor = delta > 0 ? 'text-emerald-300' : delta < 0 ? 'text-rose-300' : 'text-slate-400'
+          return (
+            <div className="px-4 py-3 border-b border-slate-800/80 bg-slate-900/40">
+              <p className="text-[10px] text-slate-500 uppercase tracking-wide font-semibold mb-1.5">
+                Simulasi modal awal $1,000
+              </p>
+              <div className="flex items-baseline gap-2 flex-wrap">
+                <span className="text-[11px] text-slate-500 font-mono">$1,000.00</span>
+                <span className="text-slate-600">→</span>
+                <span className={cn('text-lg font-black tabular-nums', dColor)}>
+                  {fmtUSD(ending)}
+                </span>
+                <span className={cn('text-[11px] font-mono tabular-nums ml-auto', dColor)}>
+                  {delta >= 0 ? '+' : ''}{fmtUSD(delta).replace('$','$')}
+                </span>
+              </div>
+              <p className="text-[10px] text-slate-500 mt-1 leading-tight">
+                Asumsi {(DEFAULT_RISK_PCT * 100).toFixed(1)}% risk per trade · simple additive (gak compound).
+                Kalo pake $5,000 modal hasil = {fmtUSD(5000 * (1 + total / 100))} · $10,000 = {fmtUSD(10000 * (1 + total / 100))}.
+              </p>
+            </div>
+          )
+        })()}
+
         {/* Sub stats grid */}
         <div className="grid grid-cols-3 gap-px bg-slate-800/60">
           <Cell label="Wins"  value={`${pctStats.n_wins}`}   tone="ok"
@@ -323,6 +406,9 @@ function EmptyStats() {
 }
 
 function TradeRow({ trade, live, xauPrice }: { trade: ActiveTrade; live?: boolean; xauPrice?: number | null }) {
+  // Default-expanded for OPEN trades (user wants live tracking visible),
+  // collapsed for closed trades (history scan-friendly, tap to expand chart).
+  const [expanded, setExpanded] = useState(Boolean(live))
   const Icon = STYLE_ICON[trade.style] ?? Target
   const tone = STATUS_TONE[trade.status]
   const sideColor = trade.side === 'LONG' ? 'text-emerald-300' : 'text-rose-300'
@@ -340,7 +426,10 @@ function TradeRow({ trade, live, xauPrice }: { trade: ActiveTrade; live?: boolea
   const durationMs = closed - opened
 
   return (
-    <div className="px-3.5 py-3">
+    <div
+      className={cn('px-3.5 py-3', !live && 'cursor-pointer hover:bg-slate-800/30 transition-colors')}
+      onClick={live ? undefined : () => setExpanded(v => !v)}
+    >
       <div className="flex items-center gap-2.5">
         <div className="w-7 h-7 rounded-lg bg-slate-900/50 border border-slate-700/50 flex items-center justify-center shrink-0">
           <Icon size={13} className="text-slate-400" />
@@ -399,9 +488,14 @@ function TradeRow({ trade, live, xauPrice }: { trade: ActiveTrade; live?: boolea
         </span>
       </div>
 
-      {/* Time-series chart — actual price action between opened_at..now/closed_at,
-          with horizontal lines for entry/SL/TP1/TP2 and dots at entry/exit. */}
-      <TradeChart trade={trade} live={live} xauPrice={xauPrice ?? null} />
+      {/* Time-series chart — only when expanded. Live trades default expanded;
+          closed trades default collapsed (tap row to expand). */}
+      {expanded && (
+        <TradeChart trade={trade} live={live} xauPrice={xauPrice ?? null} />
+      )}
+      {!live && !expanded && (
+        <p className="mt-1 text-[9px] text-slate-600 text-center">tap untuk lihat chart</p>
+      )}
     </div>
   )
 }
