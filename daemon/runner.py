@@ -1,6 +1,7 @@
 """Single signal generation: fetch data → run 9-agent debate → push to Supabase."""
 from __future__ import annotations
 
+import os
 import time
 import traceback
 from datetime import datetime, timezone
@@ -84,6 +85,27 @@ def run_once(store: SettingsStore, settings: dict, log=print, trigger_reason: st
     regime_4h = current_regime(annotate_session(df_4h))
     regime_label = regime_4h["regime"]
 
+    # SPOT XAU/USD for ENTRY/SL/TP base (not df['close'] which = GC=F futures).
+    # Indicators stay from df_p (GC=F bars) — patterns are RELATIVE so
+    # futures-vs-spot doesn't change validity, only price level.
+    #
+    # Three-tier resolution:
+    #   1. Twelve Data real-time spot (most accurate, matches broker ±$0.50)
+    #   2. Estimated spot = GC=F close - typical premium (~$5 default,
+    #      env XAU_FUTURES_PREMIUM_USD overrides)
+    #   3. Fall back to df_close (legacy, may have $5-7 broker offset)
+    spot_for_entry = None
+    DEFAULT_PREMIUM = float(os.environ.get("XAU_FUTURES_PREMIUM_USD") or 5.0)
+    if realtime.get("source") == "twelvedata":
+        v = float(realtime.get("price") or 0)
+        if v > 0:
+            spot_for_entry = v
+            log(f"[runner] entry-base spot=${v:.2f} (twelvedata real-time)")
+    if spot_for_entry is None and df_5m is not None and len(df_5m) > 0:
+        df_close_now = float(df_5m["close"].iloc[-1])
+        spot_for_entry = round(df_close_now - DEFAULT_PREMIUM, 2)
+        log(f"[runner] entry-base spot=${spot_for_entry:.2f} (estimated: GC=F ${df_close_now:.2f} - ${DEFAULT_PREMIUM:.2f} premium)")
+
     # Per-style strategy results (rule-based, deterministic)
     def _ctx(df_p, df_h):
         return StrategyContext(
@@ -91,6 +113,7 @@ def run_once(store: SettingsStore, settings: dict, log=print, trigger_reason: st
             intermarket=inter, cot=cot,
             in_news_blackout=in_blk, news_event=blk_evt,
             session=sess, regime=regime_label,
+            spot_price=spot_for_entry,
         )
     sig_scalper  = scalper.generate(_ctx(df_5m, df_1h))
     sig_intraday = intraday.generate(_ctx(df_15m, df_4h))

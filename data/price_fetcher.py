@@ -24,16 +24,18 @@ import yfinance as yf
 from config.settings import DATA_CACHE, TICKERS
 
 # Fallback tickers per asset — kalau primary gagal, coba alternatif.
-# Order CRITICAL: paling akurat ke broker spot quote dulu.
 #
-# XAU FIX (2026-05-06): primary was "GC=F" (COMEX gold futures) which
-# trades at ~$2-7 PREMIUM over spot due to contango/interest-rate
-# differential. Real Exness/MT5 broker quotes XAU/USD SPOT, so signals
-# computed from GC=F close were ~$5-7 above real entry/SL/TP. Switched
-# to "XAUUSD=X" (Yahoo's FX spot quote) which tracks broker spot within
-# ~$0.50 typically. GC=F kept as last fallback only.
+# XAU NOTE (2026-05-06): tried switching primary to "XAUUSD=X" (Yahoo's
+# FX spot quote) to avoid GC=F futures premium ($5-7 above broker spot),
+# but the yfinance Python lib returns 404 for XAUUSD=X (delisted at the
+# library's API endpoint). Reverted to GC=F primary for OHLC bars.
+#
+# REAL FIX: futures premium handled at strategy level — entry/SL/TP base
+# uses realtime SPOT from Twelve Data (passed via StrategyContext.spot_price).
+# Indicators (EMA/RSI/SMC patterns) still computed from GC=F bars which is
+# fine because RELATIVE measures behave the same on futures as spot.
 FALLBACK_TICKERS = {
-    "xau":    ["XAUUSD=X", "GC=F", "GLD", "IAU"],     # SPOT FX -> futures -> ETF -> alt
+    "xau":    ["GC=F", "GLD", "IAU"],                 # futures -> ETF -> alt ETF
     "dxy":    ["DX-Y.NYB", "DX=F", "UUP"],            # ICE DXY -> futures -> bullish dollar ETF
     "us10y":  ["^TNX", "^IRX", "TLT"],                # 10Y yield -> 13W -> long bond ETF
     "tip":    ["TIP", "VTIP", "SCHP"],                # IMPROVEMENT #2: TIPS ETF (real yield proxy)

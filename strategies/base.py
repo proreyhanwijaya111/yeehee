@@ -55,6 +55,11 @@ class StrategyContext:
     news_event: Optional[object] = None
     session: str = ""
     regime: str = ""
+    # Real-time SPOT XAU/USD from Twelve Data (or fallback). Used as the BASE
+    # PRICE for entry/SL/TP so levels match the broker's spot quote, not the
+    # GC=F futures premium that df_primary['close'] reflects. None → strategies
+    # fall back to df_primary close (legacy behavior, may have ~$5-7 offset).
+    spot_price: Optional[float] = None
 
 
 def calc_rr(entry: float, sl: float, tp: float, side: str) -> float:

@@ -16,7 +16,9 @@ def generate(ctx: StrategyContext) -> Signal:
 
     last = df.iloc[-1]
     atr_v = float(last.get("atr14", df["close"].iloc[-1] * 0.005))
-    close = float(last["close"])
+    df_close = float(last["close"])
+    # Real-time SPOT for entry/SL/TP base (see runner.py spot_for_entry).
+    close = float(ctx.spot_price) if ctx.spot_price else df_close
 
     reasons_long: list[str] = []
     reasons_short: list[str] = []
