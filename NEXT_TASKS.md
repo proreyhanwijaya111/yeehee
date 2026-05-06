@@ -12,16 +12,26 @@ all items are **non-urgent**. None blocks current functionality.
 - [x] Verified MC math correctness (analytical = actual, expectancy 0.375)
 - [x] Historical backtest API + UI (real XAU OHLCV + rule-engine + equity curve)
 
-## SESSION 2026-05-06 19:55 WIB — autonomous spot price triage (PC kantor)
+## SESSION 2026-05-06 19:55 WIB — autonomous spot price triage (PC RUMAH / worker)
+
+> **CLARIFICATION (2026-05-06 ~22:50 WIB)**: Claude di session ini awalnya keliru
+> sebut PC ini "PC kantor" — yang BENAR adalah **PC RUMAH** (worker, hostname
+> `DESKTOP-LHVGFIT`, IP 192.168.1.82). Yang menjalankan daemon, MT5 Exness, dan
+> tempat semua action di session ini terjadi. **PC kantor** = remote dev env
+> tempat user develop kode (tidak run daemon, tidak ada MT5). User Claude di PC
+> kantor besok yang bakal baca file ini perlu paham: setiap aksi di session ini
+> terjadi di PC rumah, bukan PC kantor. Topology disimpan permanent di memory
+> file `setup_topology.md`.
 
 User pergi ke RS, minta gua handle gap $4-7 antara harga sinyal vs broker. State saat
-intervensi: daemon PRIMARY di PC kantor (`worker_id=desktopl-auto`), log
+intervensi: daemon PRIMARY di PC rumah (worker, `worker_id=desktopl-auto`), log
 `xau spot: $4690.70 (yfinance_fallback)`,
 `entry-base spot=$4686.90 (GC=F $4693.90 - $7.00 premium)`. Broker MT5 mid $4681.55.
 
 Diagnosis 4-tier spot resolution:
-- **Tier 0 (MT5 EA mirror)**: off — FastAPI :8001 belum di-start di PC kantor + EA
-  belum attach ke chart. **User harus setup manual besok** (lihat instruksi bawah).
+- **Tier 0 (MT5 EA mirror)**: off — FastAPI :8001 belum di-start di PC rumah + EA
+  belum attach ke chart. **User harus setup manual besok di PC rumah** (lihat
+  instruksi bawah; PC kantor tidak bisa setup ini karena ga ada MT5 di sana).
 - **Tier 1 (Twelve Data)**: QUOTA HABIS hari ini ("1502/800 credits used"). Reset
   besok pagi (UTC 00:00 = 07:00 WIB), lalu daemon auto-recalibrate adaptive premium.
 - **Tier 2 (Yahoo HTTPS XAUUSD=X)**: 404 "delisted" — symbol mati di endpoint Yahoo,
@@ -53,7 +63,7 @@ dari $7 default tapi belum sempurna track fast moves.
 
 User bilang "akalin dengan cara pragmatis engineering biar signal akurat". Solution:
 `scripts/recalibrate_gap.py` (NEW file, no daemon code change). Setiap 60 detik:
-- Pull GC=F latest 5m close (yfinance python lib, proven works on PC kantor)
+- Pull GC=F latest 5m close (yfinance python lib, proven works on PC rumah)
 - Pull XAU spot dari stooq.com CSV (no key, no quota, broker-grade)
 - Compute gap = GC=F - XAU
 - Sanity clip ke [$1.01, $25.00] — gold basis rarely outside this range
@@ -103,9 +113,12 @@ restart). Decision tonight: skip karena restart daemon risky tanpa user supervis
 3. Add df_close_now sanity check (block GLD-fallback corruption)
 4. Restart daemon, retire recalibrator script (or keep as belt-and-suspenders).
 
-### Untuk MT5 EA mirror (Tier 0) — yang user pengen utamanya, lanjutin BESOK
+### Untuk MT5 EA mirror (Tier 0) — yang user pengen utamanya, lanjutin BESOK di PC RUMAH
 
-State PC kantor sekarang: MT5 Exness Demo running, XAUUSDm di Market Watch,
+> Catatan: MT5 + DextradeEA hanya ada di PC rumah (worker). Setup ini harus
+> dilakukan langsung di PC rumah, bukan via remote dev di PC kantor.
+
+State PC rumah sekarang: MT5 Exness Demo running, XAUUSDm di Market Watch,
 DextradeEA udah di Navigator (compiled sebelumnya). Yang kurang:
 
 1. **Start FastAPI execution_api** (terminal terpisah, biarkan running):
