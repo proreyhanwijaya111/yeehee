@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Background — dark slate with subtle gradient -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%"   stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#1e293b"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"   stop-color="#fbbf24"/>
+      <stop offset="100%" stop-color="#d97706"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Rounded square background (PWA maskable safe zone is center 80%) -->
+  <rect width="512" height="512" rx="96" fill="url(#bg)"/>
+
+  <!-- Trend line ascending — abstract chart -->
+  <path d="M 80 360 Q 150 320, 200 280 T 320 200 L 432 140"
+        fill="none"
+        stroke="url(#gold)"
+        stroke-width="14"
+        stroke-linecap="round"
+        stroke-linejoin="round"/>
+
+  <!-- Three candle bars representing OHLC -->
+  <g opacity="0.95">
+    <!-- Candle 1: bullish green -->
+    <line x1="160" y1="290" x2="160" y2="370" stroke="#22c55e" stroke-width="3"/>
+    <rect x="148" y="305" width="24" height="50" rx="2" fill="#22c55e"/>
+    <!-- Candle 2: bullish gold (highlighted) -->
+    <line x1="256" y1="220" x2="256" y2="320" stroke="#fbbf24" stroke-width="3"/>
+    <rect x="244" y="240" width="24" height="65" rx="2" fill="#fbbf24"/>
+    <!-- Candle 3: bullish green -->
+    <line x1="352" y1="170" x2="352" y2="260" stroke="#22c55e" stroke-width="3"/>
+    <rect x="340" y="185" width="24" height="55" rx="2" fill="#22c55e"/>
+  </g>
+
+  <!-- "Y" letter at top-left, subtle -->
+  <text x="256" y="430"
+        font-family="ui-sans-serif, system-ui, -apple-system, sans-serif"
+        font-size="58"
+        font-weight="900"
+        text-anchor="middle"
+        fill="#fbbf24"
+        letter-spacing="-2">yeehee</text>
+</svg>

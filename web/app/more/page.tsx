@@ -4,6 +4,7 @@ import {
   Calculator, ChevronRight, Github, ExternalLink, Sparkles, Zap,
   type LucideIcon,
 } from 'lucide-react'
+import UserHeader from '@/components/UserHeader'
 
 type Item = {
   href: string
@@ -63,6 +64,8 @@ export default function MorePage() {
       </header>
 
       <div className="space-y-5">
+        <UserHeader />
+
         {SECTIONS.map(section => (
           <section key={section.title}>
             <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-widest mb-1.5 px-2">

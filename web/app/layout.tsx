@@ -1,6 +1,6 @@
 import type { Metadata, Viewport } from 'next'
 import './globals.css'
-import BottomNav from '@/components/BottomNav'
+import LayoutShell from '@/components/LayoutShell'
 
 export const metadata: Metadata = {
   title:       'yeehee · Signal Emas XAU/USD',
@@ -12,8 +12,9 @@ export const metadata: Metadata = {
     title:             'yeehee',
   },
   icons: {
-    icon:  '/icons/icon-192.png',
-    apple: '/icons/icon-192.png',
+    icon:  '/icons/icon.svg',
+    apple: '/icons/icon.svg',
+    shortcut: '/icons/icon.svg',
   },
   openGraph: {
     title:       'yeehee · Signal Emas XAU/USD',
@@ -27,21 +28,22 @@ export const viewport: Viewport = {
   initialScale:        1,
   maximumScale:        1,
   userScalable:        false,
-  themeColor:          '#0f172a',
+  themeColor:          '#fbbf24',
   viewportFit:         'cover',
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="id" className="dark">
+      <head>
+        {/* iOS PWA install — distinct from android via apple-touch-icon */}
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+        <meta name="apple-mobile-web-app-title" content="yeehee" />
+        <link rel="apple-touch-icon" href="/icons/icon.svg" />
+      </head>
       <body className="bg-slate-950 text-slate-100 min-h-dvh">
-        {/* Main content — bottom padding for nav bar */}
-        <div className="pb-[72px] min-h-dvh">
-          {children}
-        </div>
-
-        {/* Bottom navigation */}
-        <BottomNav />
+        <LayoutShell>{children}</LayoutShell>
       </body>
     </html>
   )
