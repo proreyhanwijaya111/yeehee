@@ -5,10 +5,11 @@
  *   { scope: 'open' }   — close all OPEN trades as MANUAL (no pnl impact)
  *   { scope: 'all' }    — delete EVERYTHING (open + closed). Clean slate.
  *
- * Used from /portfolio when user wants to start fresh from new code base
- * (e.g. after BEP fix or after switching to Opsi A simplified gate).
- *
- * Service-role key required so we can delete past rows. Anon key won't work.
+ * Auth fallback chain (most permissive first):
+ *   1. SUPABASE_SERVICE_ROLE_KEY (best — bypasses RLS)
+ *   2. SUPABASE_SUPABASE_KEY (alias)
+ *   3. NEXT_PUBLIC_SUPABASE_ANON_KEY (works since project has no RLS on
+ *      active_trades — daemon uses same key for inserts)
  */
 import { NextRequest, NextResponse } from 'next/server'
 
@@ -16,13 +17,17 @@ export const dynamic = 'force-dynamic'
 export const runtime = 'edge'
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || ''
-const SERVICE_KEY  = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || ''
+const SUPABASE_KEY =
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+  || process.env.SUPABASE_SUPABASE_KEY
+  || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  || ''
 const USER_ID      = 'default'
 
 export async function POST(req: NextRequest) {
-  if (!SUPABASE_URL || !SERVICE_KEY) {
+  if (!SUPABASE_URL || !SUPABASE_KEY) {
     return NextResponse.json(
-      { ok: false, error: 'SUPABASE_SERVICE_ROLE_KEY missing in Vercel env' },
+      { ok: false, error: 'NEXT_PUBLIC_SUPABASE_URL or SUPABASE_ANON_KEY missing in Vercel env' },
       { status: 500 },
     )
   }
@@ -36,8 +41,8 @@ export async function POST(req: NextRequest) {
   const scope = body.scope === 'all' ? 'all' : 'open'
 
   const headers = {
-    'apikey':         SERVICE_KEY,
-    'Authorization':  `Bearer ${SERVICE_KEY}`,
+    'apikey':         SUPABASE_KEY,
+    'Authorization':  `Bearer ${SUPABASE_KEY}`,
     'Content-Type':   'application/json',
     'Prefer':         'return=representation',
   } as const
@@ -63,7 +68,7 @@ export async function POST(req: NextRequest) {
     try {
       const sigR = await fetch(
         `${SUPABASE_URL}/rest/v1/signal_bundles?select=xau_price&order=timestamp.desc&limit=1`,
-        { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` }, cache: 'no-store' },
+        { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }, cache: 'no-store' },
       )
       if (sigR.ok) {
         const arr = await sigR.json()
