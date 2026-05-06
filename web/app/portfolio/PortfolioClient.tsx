@@ -1,9 +1,10 @@
 'use client'
 import { useState, useMemo } from 'react'
+import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import {
   ArrowLeft, Briefcase, Activity, Target, Zap, Waves,
-  CheckCircle2, Hourglass, type LucideIcon, Clock,
+  CheckCircle2, Hourglass, type LucideIcon, Clock, RotateCcw, Loader2,
 } from 'lucide-react'
 import {
   type ActiveTrade, type PortfolioStats, type TradeStatus,
@@ -16,6 +17,7 @@ interface Props {
   openTrades:   ActiveTrade[]
   closedTrades: ActiveTrade[]
   stats:        PortfolioStats | null
+  xauPrice:     number | null   // current spot for live trades chart
 }
 
 const STYLE_ICON: Record<string, LucideIcon> = {
@@ -39,8 +41,35 @@ const STATUS_TONE: Record<TradeStatus, 'open' | 'win' | 'loss' | 'neutral'> = {
   SL: 'loss', EXPIRED: 'neutral', MANUAL: 'neutral',
 }
 
-export default function PortfolioClient({ openTrades, closedTrades, stats }: Props) {
+export default function PortfolioClient({ openTrades, closedTrades, stats, xauPrice }: Props) {
   const [filter, setFilter] = useState<StyleFilter>('all')
+  const [resetting, setResetting] = useState<null | 'open' | 'all'>(null)
+  const router = useRouter()
+
+  const handleReset = async (scope: 'open' | 'all') => {
+    const msg = scope === 'all'
+      ? 'Hapus SEMUA trade history (open + closed)? Gak bisa di-undo.'
+      : 'Tutup semua trade yang masih OPEN sebagai MANUAL close (pnl=0)?'
+    if (!confirm(msg)) return
+    setResetting(scope)
+    try {
+      const r = await fetch('/api/portfolio/reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scope }),
+      })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok || !j.ok) {
+        alert(`Reset gagal: ${j.error || r.statusText}`)
+      } else {
+        router.refresh()
+      }
+    } catch (e) {
+      alert(`Reset error: ${String(e)}`)
+    } finally {
+      setResetting(null)
+    }
+  }
 
   // Filter both lists by style
   const filteredOpen   = filter === 'all' ? openTrades   : openTrades.filter(t => t.style === filter)
@@ -80,10 +109,11 @@ export default function PortfolioClient({ openTrades, closedTrades, stats }: Pro
         <div className="w-8 h-8 rounded-lg bg-emerald-700/30 border border-emerald-600/30 flex items-center justify-center">
           <Briefcase size={16} className="text-emerald-300" />
         </div>
-        <div>
+        <div className="flex-1 min-w-0">
           <h1 className="text-lg font-black text-slate-100 leading-tight">Portfolio</h1>
           <p className="text-[11px] text-slate-500">Active trades + history · win rate real dari outcome.</p>
         </div>
+        <ResetMenu onReset={handleReset} busy={resetting} />
       </header>
 
       <div className="space-y-5">
@@ -115,7 +145,7 @@ export default function PortfolioClient({ openTrades, closedTrades, stats }: Pro
 
         {filteredOpen.length > 0 ? (
           <Group title={`Active trades (${filteredOpen.length})`}>
-            {filteredOpen.map(t => <TradeRow key={t.id} trade={t} live />)}
+            {filteredOpen.map(t => <TradeRow key={t.id} trade={t} live xauPrice={xauPrice} />)}
           </Group>
         ) : (
           <Group title="Active trades">
@@ -245,7 +275,7 @@ function EmptyStats() {
   )
 }
 
-function TradeRow({ trade, live }: { trade: ActiveTrade; live?: boolean }) {
+function TradeRow({ trade, live, xauPrice }: { trade: ActiveTrade; live?: boolean; xauPrice?: number | null }) {
   const Icon = STYLE_ICON[trade.style] ?? Target
   const tone = STATUS_TONE[trade.status]
   const sideColor = trade.side === 'LONG' ? 'text-emerald-300' : 'text-rose-300'
@@ -321,6 +351,169 @@ function TradeRow({ trade, live }: { trade: ActiveTrade; live?: boolean }) {
           }
         </span>
       </div>
+
+      {/* Price-level chart — gives instant context: where is price now relative
+          to entry/SL/TPs? Live trades show current spot dot, closed trades show
+          exit price. Renders as a horizontal axis with markers and labeled zones. */}
+      <PriceLevelChart trade={trade} live={live} xauPrice={xauPrice ?? null} />
+    </div>
+  )
+}
+
+/** Horizontal price-level visualisation per trade.
+ *  - LONG: SL (left, red) → Entry → Now → TP1 → TP2 (right, green)
+ *  - SHORT: mirrored — TP2 left, SL right
+ *  Marker positions interpolate linearly between min/max levels.
+ *  For closed trades, the "Now" dot is replaced by exit_price.
+ */
+function PriceLevelChart({
+  trade, live, xauPrice,
+}: {
+  trade: ActiveTrade; live?: boolean; xauPrice: number | null
+}) {
+  const entry = Number(trade.entry)
+  const sl    = Number(trade.sl)
+  const tp1   = trade.tp1 ? Number(trade.tp1) : null
+  const tp2   = trade.tp2 ? Number(trade.tp2) : null
+  if (!isFinite(entry) || !isFinite(sl)) return null
+
+  // "Now" — live spot for OPEN trades, exit_price for closed trades.
+  const now = live
+    ? (xauPrice ?? (trade.high_after_open !== null ? Number(trade.high_after_open) : entry))
+    : (trade.exit_price !== null ? Number(trade.exit_price) : entry)
+
+  const isLong = trade.side === 'LONG'
+  // Build axis: lowest = SL (LONG) or TP2 (SHORT); highest opposite.
+  const allLevels = [sl, entry, now, ...(tp1 ? [tp1] : []), ...(tp2 ? [tp2] : [])]
+  const min = Math.min(...allLevels)
+  const max = Math.max(...allLevels)
+  const range = max - min || 1
+  const pct = (v: number) => ((v - min) / range) * 100
+
+  // Color the bar: red zone (loss side of entry) → green zone (profit side).
+  // For LONG: red below entry, green above. For SHORT: opposite.
+  const entryPct = pct(entry)
+  const slPct    = pct(sl)
+  const nowPct   = pct(now)
+  const tp1Pct   = tp1 ? pct(tp1) : null
+  const tp2Pct   = tp2 ? pct(tp2) : null
+
+  // PnL relative to original SL distance for status label
+  const slDist = Math.abs(entry - sl)
+  const r = slDist > 0
+    ? (isLong ? (now - entry) / slDist : (entry - now) / slDist)
+    : 0
+  const rClass = r > 0 ? 'text-emerald-300' : r < 0 ? 'text-rose-300' : 'text-slate-400'
+
+  return (
+    <div className="mt-2.5">
+      {/* Bar */}
+      <div className="relative h-7 bg-slate-900/40 rounded border border-slate-800">
+        {/* Profit zone shading (entry → TPs side) */}
+        <div
+          className={cn(
+            'absolute top-0 bottom-0 rounded',
+            isLong ? 'bg-emerald-500/10' : 'bg-emerald-500/10',
+          )}
+          style={
+            isLong
+              ? { left: `${entryPct}%`, right: 0 }
+              : { right: `${100 - entryPct}%`, left: 0 }
+          }
+        />
+        {/* Loss zone shading (entry → SL side) */}
+        <div
+          className={cn('absolute top-0 bottom-0 rounded bg-rose-500/10')}
+          style={
+            isLong
+              ? { left: 0, right: `${100 - entryPct}%` }
+              : { left: `${entryPct}%`, right: 0 }
+          }
+        />
+
+        {/* SL marker */}
+        <Marker pct={slPct} color="bg-rose-500"  label="SL"  fmtV={fmtPrice(sl)} />
+        {/* Entry marker */}
+        <Marker pct={entryPct} color="bg-slate-300" label="Entry" fmtV={fmtPrice(entry)} thicker />
+        {/* TP markers */}
+        {tp1Pct !== null && tp1 && <Marker pct={tp1Pct} color="bg-emerald-500" label="TP1" fmtV={fmtPrice(tp1)} />}
+        {tp2Pct !== null && tp2 && <Marker pct={tp2Pct} color="bg-emerald-400" label="TP2" fmtV={fmtPrice(tp2)} />}
+
+        {/* Current price / exit dot */}
+        <div
+          className={cn(
+            'absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-2.5 h-2.5 rounded-full ring-2 ring-slate-950 z-10',
+            live ? (r > 0 ? 'bg-emerald-300' : r < 0 ? 'bg-rose-300' : 'bg-amber-300')
+                 : (r > 0 ? 'bg-emerald-400' : 'bg-rose-400'),
+          )}
+          style={{ left: `${nowPct}%` }}
+          title={live ? `Now ${fmtPrice(now)}` : `Exit ${fmtPrice(now)}`}
+        />
+      </div>
+
+      {/* Status row beneath bar */}
+      <div className="mt-1 flex items-center justify-between text-[9px] text-slate-500 font-mono px-0.5">
+        <span>{isLong ? `SL ${fmtPrice(sl)}` : `TP2 ${tp2 ? fmtPrice(tp2) : '-'}`}</span>
+        <span className={rClass}>
+          {live ? 'Now' : 'Exit'} {fmtPrice(now)} ({r >= 0 ? '+' : ''}{r.toFixed(2)} R)
+        </span>
+        <span>{isLong ? `TP2 ${tp2 ? fmtPrice(tp2) : '-'}` : `SL ${fmtPrice(sl)}`}</span>
+      </div>
+    </div>
+  )
+}
+
+function Marker({
+  pct, color, label, fmtV, thicker,
+}: {
+  pct: number; color: string; label: string; fmtV: string; thicker?: boolean
+}) {
+  return (
+    <div
+      className="absolute top-0 bottom-0 -translate-x-1/2 group"
+      style={{ left: `${pct}%` }}
+      title={`${label} ${fmtV}`}
+    >
+      <div className={cn('h-full', color, thicker ? 'w-[2px]' : 'w-px')} />
+    </div>
+  )
+}
+
+function ResetMenu({ onReset, busy }: { onReset: (scope: 'open' | 'all') => void; busy: null | 'open' | 'all' }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setOpen(v => !v)}
+        className="p-1.5 hover:bg-slate-800 rounded-lg text-slate-400"
+        aria-label="Reset portfolio"
+        disabled={busy !== null}
+      >
+        {busy ? <Loader2 size={16} className="animate-spin" /> : <RotateCcw size={16} />}
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 top-full mt-1 w-56 bg-slate-900 border border-slate-700 rounded-xl shadow-xl z-50 overflow-hidden">
+            <button
+              onClick={() => { setOpen(false); onReset('open') }}
+              className="w-full text-left px-3 py-2.5 text-[11px] text-slate-200 hover:bg-slate-800 border-b border-slate-800"
+              disabled={busy !== null}
+            >
+              <div className="font-semibold">Tutup semua OPEN</div>
+              <div className="text-[10px] text-slate-500 leading-tight">Mark MANUAL close, pnl=0</div>
+            </button>
+            <button
+              onClick={() => { setOpen(false); onReset('all') }}
+              className="w-full text-left px-3 py-2.5 text-[11px] text-rose-200 hover:bg-rose-900/30"
+              disabled={busy !== null}
+            >
+              <div className="font-semibold">Hapus SEMUA history</div>
+              <div className="text-[10px] text-slate-500 leading-tight">Clean slate. Tidak bisa undo.</div>
+            </button>
+          </div>
+        </>
+      )}
     </div>
   )
 }

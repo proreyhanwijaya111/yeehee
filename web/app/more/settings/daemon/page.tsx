@@ -190,16 +190,21 @@ export default function DaemonPage() {
             Cara kerja daemon
           </summary>
           <div className="px-3.5 pb-3.5 pt-1 space-y-2 text-[11px] text-slate-500 leading-relaxed border-t border-slate-800/80">
-            <p className="text-slate-400">Tiap {s.refresh_interval_minutes} menit:</p>
+            <p className="text-slate-400">Tiap {s.refresh_interval_minutes} menit, daemon worker:</p>
             <ol className="list-decimal pl-4 space-y-1">
               <li>Pull config (provider key, model, agent settings) dari Supabase</li>
               <li>Fetch data XAU/USD + intermarket + COT + calendar</li>
-              <li>Run 9-agent LLM debate (paralel per tier)</li>
-              <li>Push hasil signal ke Supabase</li>
-              <li>Vercel UI baca dari Supabase, tampilkan ke HP lo</li>
-              <li>Cek queue Mira chatbot tiap 5 detik, proses kalau ada</li>
+              <li>Run 12-agent LLM debate (paralel per tier)</li>
+              <li>Compute RCS composite indicator (referensi tambahan)</li>
+              <li>Push hasil signal ke Supabase, Vercel UI baca → tampil di HP</li>
+              <li>Promote signal ke EA queue kalau lulus min_confidence</li>
             </ol>
-            <p className="pt-1 text-amber-400">Port lokal 3031 - beda dari Mira WA worker (3030). Aman jalan barengan.</p>
+            <p className="text-slate-400 pt-1">Installer setup 2 service:</p>
+            <ul className="list-disc pl-4 space-y-1">
+              <li><span className="font-mono text-slate-300">yeehee-signal-daemon</span> — signal worker (port 3031)</li>
+              <li><span className="font-mono text-slate-300">yeehee-execution-api</span> — FastAPI yang MT5 EA polling tiap 5s (port 8001)</li>
+            </ul>
+            <p className="pt-1 text-amber-400">Port aman jalan barengan dengan Mira WA worker (3030).</p>
           </div>
         </details>
 
@@ -228,12 +233,18 @@ export default function DaemonPage() {
         <>
           {/* INTRO — what is this for */}
           <div className="bg-sky-950/30 border border-sky-800/40 rounded-xl p-3.5 text-[11px] leading-relaxed">
-            <p className="text-sky-100 font-semibold mb-1.5">Install daemon di PC rumah lo</p>
+            <p className="text-sky-100 font-semibold mb-1.5">Install seemless di PC rumah</p>
             <p className="text-sky-200/80 mb-2">
-              Daemon = program kecil yang jalan terus di PC lo, fetch data XAU + jalanin AI agent + push signal ke cloud. Tanpa daemon, signal di app tidak update otomatis.
+              Satu copy-paste = install daemon worker (signal engine) + execution API (FastAPI buat MT5 EA polling) + deploy file EA ke MT5 (kalo MT5 udah ke-install). Cukup 1× setup per PC.
             </p>
+            <ul className="text-sky-200/70 list-disc pl-4 space-y-0.5 mb-2">
+              <li>Auto-install Python 3.13+ kalau belum ada</li>
+              <li>Auto-install Git, NSSM (service manager)</li>
+              <li>Register 2 Windows Service (auto-start saat boot, restart kalau crash)</li>
+              <li>Auto-copy <span className="font-mono">DextradeEA.mq5</span> ke folder MT5 kalo terdeteksi</li>
+            </ul>
             <p className="text-sky-200/70">
-              <span className="font-semibold text-sky-100">Total waktu</span>: ~5 menit (otomatis install Python + Git kalo belum ada). Cukup 1× setup per PC.
+              <span className="font-semibold text-sky-100">Total waktu</span>: ~5 menit. Butuh PowerShell <span className="font-bold text-amber-300">Run as Administrator</span> (default = Service mode).
             </p>
           </div>
 
@@ -346,12 +357,28 @@ export default function DaemonPage() {
             </details>
           </Section>
 
+          {/* STEP 4: MT5 EA setup (only relevant if MT5 installed) */}
+          <Section
+            title="Langkah 4 · MT5 EA setup (kalau lo pake auto-execute)"
+            sub="Installer udah copy file DextradeEA.mq5 ke folder MT5. Tinggal compile + drag ke chart."
+          >
+            <ol className="text-[11px] text-slate-400 list-decimal pl-5 space-y-1.5 leading-relaxed">
+              <li>Buka MT5 → menu File → Open Data Folder → masuk <span className="font-mono bg-slate-800 px-1 rounded">MQL5\Experts</span> → cek <span className="font-mono bg-slate-800 px-1 rounded">DextradeEA.mq5</span> ada</li>
+              <li>Tools → MetaQuotes Language Editor (atau F4) → buka file → tekan F7 untuk compile</li>
+              <li>Kembali ke MT5 → Navigator → Expert Advisors → drag <span className="font-mono">DextradeEA</span> ke chart XAUUSDm</li>
+              <li>Tools → Options → Expert Advisors → centang <span className="font-mono">Allow WebRequest</span> + tambah URL <span className="font-mono bg-slate-800 px-1 rounded">http://localtest.me:8001</span> (tekan Enter sebelum OK!)</li>
+              <li>Toolbar atas → klik tombol <span className="font-bold text-amber-300">Algo Trading</span> sampai jadi hijau (Ctrl+E)</li>
+              <li>Cek Experts tab di bawah → harus muncul log <span className="font-mono">[DextradeEA] v0.2.0 init</span></li>
+            </ol>
+            <p className="text-[10px] text-emerald-400 pt-1">Default mode = paper test (no real order). Buka <Link href="/more/settings/execution" className="text-sky-300 underline">/execution</Link> buat live setelah confirm 30 hari.</p>
+          </Section>
+
           {/* Notes */}
           <div className="bg-slate-900/40 border border-slate-800 rounded-xl p-3 text-[10px] text-slate-500 leading-relaxed space-y-1.5">
             <p className="text-slate-300 font-semibold">Catatan penting:</p>
-            <p>• Window PowerShell harus tetap kebuka biar daemon jalan. Tutup window = daemon stop.</p>
-            <p>• Untuk auto-start saat boot (ga perlu PowerShell terus kebuka), lihat tab <span className="font-bold text-slate-300">Auto-start</span>.</p>
-            <p>• Worker ID auto-generate per install. Kalo lo install di 2 PC, masing-masing punya worker_id beda — keduanya bakal muncul di "Workers aktif" di atas.</p>
+            <p>• Service mode default = auto-start saat Windows boot, auto-restart kalau crash. Gak perlu PowerShell tetep kebuka.</p>
+            <p>• Worker ID auto-generate per install. Multi-PC: install di tiap PC, masing-masing dapet worker_id beda + muncul di "Workers aktif" atas.</p>
+            <p>• Kalo PC ini gak pake MT5 (worker-only mode), tambahin flag <span className="font-mono bg-slate-800 px-1 rounded">-SkipExecutionApi -SkipMt5Deploy</span> di akhir command.</p>
           </div>
         </>
       )}

@@ -18,3 +18,9 @@ python-dotenv>=1.0.0
 pydantic>=2.6.0
 tenacity>=8.2.0
 psutil>=5.9.0
+
+# Execution API (FastAPI server EA polls for orders) — bundled so single-PC
+# install (daemon + EA) works out-of-box. Lean: ~15 MB combined. The EA on
+# MT5 calls /api/ea/next-signal here every 5s; without these, EA gets nothing.
+fastapi>=0.110.0
+uvicorn>=0.27.0
