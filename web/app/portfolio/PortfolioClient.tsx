@@ -477,13 +477,13 @@ function TradeRow({ trade, live, xauPrice }: { trade: ActiveTrade; live?: boolea
         </div>
       )}
 
-      {/* Duration row — explicit, readable */}
+      {/* Duration row — explicit timestamps + relative */}
       <div className="mt-1.5 flex items-center gap-2 text-[10px] text-slate-500">
         <Clock size={10} className="shrink-0" />
         <span className="font-mono">
           {live
-            ? <>open {formatDuration(durationMs)} · expires in {timeAgoFuture(trade.expiry_at)}</>
-            : <>held {formatDuration(durationMs)} · {timeAgo(trade.opened_at)} → {timeAgo(trade.closed_at ?? '')}</>
+            ? <>OP {formatTimeWIB(trade.opened_at)} <span className="text-slate-600">·</span> {formatDuration(durationMs)} jalan <span className="text-slate-600">·</span> exp {formatTimeWIB(trade.expiry_at)}</>
+            : <>OP {formatTimeWIB(trade.opened_at)} <span className="text-slate-600">→</span> CL {formatTimeWIB(trade.closed_at ?? '')} <span className="text-slate-600">·</span> {formatDuration(durationMs)}</>
           }
         </span>
       </div>
@@ -762,6 +762,32 @@ function timeAgoFuture(iso: string): string {
     const diff = new Date(iso).getTime() - Date.now()
     if (diff < 0) return 'expired'
     return formatDuration(diff)
+  } catch {
+    return '–'
+  }
+}
+
+/** Format ISO timestamp as "HH:MM" (today) or "DD/MM HH:MM" (other days), local TZ.
+ *  Used for portfolio open/close labels so user sees exact time, not relative.
+ *  Format default browser locale → matches HP system clock.
+ */
+function formatTimeWIB(iso: string): string {
+  if (!iso) return '–'
+  try {
+    const d = new Date(iso)
+    if (!isFinite(d.getTime())) return '–'
+    const today = new Date()
+    const sameDay = d.getDate() === today.getDate()
+                 && d.getMonth() === today.getMonth()
+                 && d.getFullYear() === today.getFullYear()
+    const yesterday = new Date(); yesterday.setDate(today.getDate() - 1)
+    const isYesterday = d.getDate() === yesterday.getDate()
+                     && d.getMonth() === yesterday.getMonth()
+                     && d.getFullYear() === yesterday.getFullYear()
+    const hhmm = d.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false })
+    if (sameDay)     return hhmm
+    if (isYesterday) return `kemarin ${hhmm}`
+    return d.toLocaleString('id-ID', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false })
   } catch {
     return '–'
   }
