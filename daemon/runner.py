@@ -27,10 +27,11 @@ try:
     from rcs.composite import compute_rcs
     from rcs.persistence import push_rcs_signal
     from rcs.outcome_tracker import evaluate_pending_signals as rcs_evaluate_outcomes
-    from rcs.confluence import evaluate_confluence, promote_signal_for_ea
+    from rcs.confluence import evaluate_for_ea, promote_signal_for_ea, DEFAULT_MIN_CONFIDENCE
     RCS_AVAILABLE = True
 except ImportError:
     RCS_AVAILABLE = False
+    DEFAULT_MIN_CONFIDENCE = 0.55
 
 # Drift detector (Phase v0.3, opt-in via training reference snapshot)
 try:
@@ -204,15 +205,9 @@ def run_once(store: SettingsStore, settings: dict, log=print, trigger_reason: st
     if is_primary:
         bundle_id = store.push_signal_bundle(bundle)
 
-        # ── Per-style confluence: promote to PENDING_PICKUP if all gates pass ─
-        # Multi-source agreement: ML/RCS + 12-agent + per-style strategy must agree.
-        # Only signals that pass confluence get marked is_executable=true. EA picks up.
-        rcs_ids_per_style: dict[str, int] = {}   # style -> rcs_signal_id
-
-        # ── Push RCS to rcs_signals — ONE ROW PER STYLE (M5/M15/H1) ─────────
-        # Each style gets its own RCS row with that style's entry/sl/tp levels.
-        # EA picks the row matching its target TF. Used by /more/rcs-monitor UI
-        # for history + accuracy tracking + MT5 EA polling.
+        # Push RCS to rcs_signals — one row per style (M5/M15/H1) with that
+        # style's entry/sl/tp. The EA picks up rows that pass evaluate_for_ea.
+        rcs_ids_per_style: dict[str, int] = {}
         if RCS_AVAILABLE and rcs_result_dict and bundle.get("xau_price"):
             try:
                 from rcs.composite import RCSResult, ComponentScore
@@ -257,39 +252,41 @@ def run_once(store: SettingsStore, settings: dict, log=print, trigger_reason: st
             except Exception as e:
                 log(f"[rcs] push_rcs_signal failed: {e!r}")
 
-            # ── Confluence per style: promote to PENDING_PICKUP if gates pass ──
+            # ── EA gate (Opsi A): per-style direct check, no multi-source agree ──
+            # Single rule: if strategy says LONG/SHORT with conf ≥ threshold, promote.
+            # RCS becomes display-only reference. 12-agent debate informs UI but
+            # doesn't block per-style EA execution (debate already aggregated 12
+            # specialists; layering more filters compounds away every signal).
             try:
+                ea_min_conf = float(settings.get("ea_min_confidence_pct") or 55) / 100.0
+                if ea_min_conf <= 0:
+                    ea_min_conf = DEFAULT_MIN_CONFIDENCE
                 for style_name, sig_obj in (
                     ("scalper",  sig_scalper),
                     ("intraday", sig_intraday),
                     ("swing",    sig_swing),
                 ):
-                    style_dict = sig_obj.to_dict()
-                    decision = evaluate_confluence(
+                    decision = evaluate_for_ea(
                         style=style_name,
-                        style_signal=style_dict,
-                        rcs_result=rcs_result_dict,
-                        debate_dict=debate_dict,
+                        style_signal=sig_obj.to_dict(),
+                        min_confidence=ea_min_conf,
                     )
-                    log(f"[confluence] {style_name:8s} dir={decision.direction} "
-                        f"agree={decision.sources_agreeing}/3 conf_blend={decision.confidence_blended:.2f} "
-                        f"executable={decision.is_executable} | {decision.reason[:80]}")
-                    # Promote ANY style that passes confluence (not just intraday)
                     if decision.is_executable:
                         rcs_id = rcs_ids_per_style.get(style_name)
                         if rcs_id:
-                            promote_signal_for_ea(store, rcs_id, style_name, decision, log=log)
+                            promote_signal_for_ea(store, rcs_id, decision, log=log)
                         else:
-                            log(f"[confluence] {style_name} executable but no rcs_id — skip promote")
+                            log(f"[ea] {style_name} eligible but no rcs_id — skip")
+                    elif decision.side in ("LONG", "SHORT"):
+                        # Only log directional rejections — FLAT is silent (already shown above)
+                        log(f"[ea] {style_name} {decision.side} not promoted: {decision.reason}")
             except Exception as e:
-                log(f"[confluence] error: {e!r}")
+                log(f"[ea] gate error: {e!r}")
     else:
         log("[runner] STANDBY mode — skip push_signal_bundle (primary handles it)")
 
-    # ── Per-style independence log (clarity for user) ──────────────────────────
-    # Each style is analyzed independently every cycle. Confluence + side determined
-    # solely from that style's own indicators. open_trade_if_eligible has per-style
-    # UNIQUE INDEX so one style being OPEN doesn't block another style from opening.
+    # Per-style summary (each runs independently; UNIQUE INDEX ensures
+    # 1 OPEN per style; styles do not block each other).
     for style_name, sig_obj in (("scalper", sig_scalper), ("intraday", sig_intraday), ("swing", sig_swing)):
         sd = sig_obj.to_dict()
         log(
