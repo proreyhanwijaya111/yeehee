@@ -73,21 +73,25 @@ def banner():
 
 
 def signal_loop(store: SettingsStore, log=print):
-    """Generate signals — Opsi B: scheduled cycle + event-driven momentum trigger.
+    """Generate signals — hybrid 3-tier polling.
 
-    Flow:
-      Every WATCHER_POLL_SECONDS:
-        1. Quick price + 5m feature poll (cheap)
-        2. MomentumWatcher.evaluate(...) checks trigger conditions
-        3. If trigger fires AND last_full_eval > MIN_FULL_EVAL_INTERVAL_S ago:
-             → run_once() with trigger_reason
-        4. Else if scheduled interval passed:
-             → run_once() with trigger_reason='scheduled'
-        5. Else: sleep until next poll
+    Flow per WATCHER_POLL_SECONDS (30s):
+      1. Cheap poll: realtime spot + 5m features
+      2. MomentumWatcher detect spike (>0.3% / ATR explosion / EMA cross)
+      3. **TRADE TRACKER UPDATE** (NEW Opsi C): run update_open_trades on
+         every quick poll so SL trailing → BEP / lock-TP1 fires within 30s
+         of price hitting a milestone, not waiting 3-5 min full cycle.
+      4. If momentum trigger fires AND last_full > MIN_FULL_EVAL_INTERVAL_S:
+           → run_once() with trigger_reason
+      5. Else if scheduled (refresh_interval_minutes elapsed):
+           → run_once() with reason='scheduled'
+      6. Else: sleep until next poll
     """
     from data.price_fetcher import fetch_realtime_xau_spot, fetch_xau
     from data.calendar_fetcher import in_news_blackout
     from features.technical import add_all
+    from features.smc import add_all_smc
+    from daemon.trade_tracker import update_open_trades
 
     last_signal_at: str | None = None
     watcher = MomentumWatcher(log=log)
@@ -124,10 +128,12 @@ def signal_loop(store: SettingsStore, log=print):
             scheduled_due = (now - watcher.last_full_eval_at) >= interval_min * 60
             min_interval_ok = (now - watcher.last_full_eval_at) >= MIN_FULL_EVAL_INTERVAL_S
 
-            # Quick poll for momentum detection. Failures here = skip this poll, don't crash.
+            # Quick poll for momentum detection + trade tracker hot-reload.
+            # Failures here = skip this poll, don't crash.
             trigger: TriggerEvent | None = None
+            df_5m_quick = None
             try:
-                # Cheap poll: real-time price + cached 5m bars (use_cache=True)
+                # Cheap poll: real-time price + cached 5m bars
                 rt = fetch_realtime_xau_spot()
                 price_now = float(rt.get("price") or 0)
                 if price_now > 0:
@@ -140,15 +146,31 @@ def signal_loop(store: SettingsStore, log=print):
                         in_blackout_now=bool(in_blk_now),
                     )
             except Exception as e:
-                # Don't break the loop on poll failure — just log and proceed
                 log(f"[signal] poll error: {e!r}")
+
+            # OPSI C: hot-reload trade tracker every poll (30s) so SL trailing
+            # follows price within 30s, not waiting for full cycle. Only run
+            # if PRIMARY (avoid dup updates from STANDBY) and df_5m available.
+            try:
+                # Cheap is-primary check via heartbeat helper. fail-open OK.
+                from daemon.heartbeat import get_worker_id
+                worker_id = get_worker_id()
+                user_id = settings.get("user_id", "default")
+                is_primary, _ = store.is_primary_worker(user_id=user_id, worker_id=worker_id)
+                if is_primary and df_5m_quick is not None and len(df_5m_quick) > 0:
+                    # Need SMC features too for sl_new logic
+                    df_5m_full = add_all_smc(df_5m_quick)
+                    n_modified = update_open_trades(store, df_5m_full, log=log)
+                    if n_modified > 0:
+                        log(f"[tracker-quick] updated {n_modified} open trades (poll cycle)")
+            except Exception as e:
+                log(f"[tracker-quick] error: {e!r}")
 
             # Decide what to run
             if trigger and min_interval_ok:
                 _run_full(reason=trigger.reason)
             elif scheduled_due:
                 _run_full(reason="scheduled")
-            # else: just continue polling
 
             _wait_or_shutdown(WATCHER_POLL_SECONDS)
         except Exception as e:

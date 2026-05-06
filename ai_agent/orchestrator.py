@@ -68,7 +68,7 @@ class SettingsStore:
     def app_settings(self, user_id: str = "default") -> dict:
         defaults = {
             "user_id": user_id,
-            "refresh_interval_minutes": 5,
+            "refresh_interval_minutes": 3,
             "default_llm_provider": os.environ.get("DEFAULT_LLM_PROVIDER", "openrouter"),
             "default_llm_model":    os.environ.get("DEFAULT_LLM_MODEL",    "openai/gpt-oss-20b:free"),
             "use_per_agent_models": False,

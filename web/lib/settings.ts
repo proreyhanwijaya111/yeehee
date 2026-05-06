@@ -163,7 +163,7 @@ const USER_ID = 'default'  // single-user for now
 
 const DEFAULT_SETTINGS: AppSettings = {
   user_id: USER_ID,
-  refresh_interval_minutes: 5,
+  refresh_interval_minutes: 3,
   default_llm_provider: 'openrouter',
   default_llm_model:    'openai/gpt-oss-20b:free',
   use_per_agent_models: false,
