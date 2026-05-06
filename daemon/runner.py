@@ -89,22 +89,52 @@ def run_once(store: SettingsStore, settings: dict, log=print, trigger_reason: st
     # Indicators stay from df_p (GC=F bars) — patterns are RELATIVE so
     # futures-vs-spot doesn't change validity, only price level.
     #
-    # Three-tier resolution:
+    # Resolution flow (adaptive premium):
     #   1. Twelve Data real-time spot (most accurate, matches broker ±$0.50)
-    #   2. Estimated spot = GC=F close - typical premium (~$5 default,
-    #      env XAU_FUTURES_PREMIUM_USD overrides)
-    #   3. Fall back to df_close (legacy, may have $5-7 broker offset)
+    #      → also CAPTURE gap (GC=F close - spot) and persist to state file
+    #        so future fallback is data-driven, not hardcoded
+    #   2. Twelve Data fail → load last persisted gap, apply: spot = GC=F - gap
+    #   3. No state file → fall back to env XAU_FUTURES_PREMIUM_USD (default 7)
     spot_for_entry = None
-    DEFAULT_PREMIUM = float(os.environ.get("XAU_FUTURES_PREMIUM_USD") or 5.0)
+    df_close_now = float(df_5m["close"].iloc[-1]) if df_5m is not None and len(df_5m) > 0 else None
+    DEFAULT_PREMIUM = float(os.environ.get("XAU_FUTURES_PREMIUM_USD") or 7.0)
+
+    from pathlib import Path as _Path
+    PREMIUM_STATE = _Path(__file__).resolve().parent.parent / "data_cache" / "futures_premium_gap.txt"
+
+    def _load_premium_gap() -> float:
+        try:
+            if PREMIUM_STATE.exists():
+                txt = PREMIUM_STATE.read_text(encoding="utf-8").strip()
+                v = float(txt)
+                if 1.0 < v < 30.0:  # sanity: gold premium realistic range
+                    return v
+        except Exception:
+            pass
+        return DEFAULT_PREMIUM
+
+    def _save_premium_gap(g: float) -> None:
+        try:
+            PREMIUM_STATE.parent.mkdir(parents=True, exist_ok=True)
+            PREMIUM_STATE.write_text(f"{g:.2f}", encoding="utf-8")
+        except Exception:
+            pass
+
     if realtime.get("source") == "twelvedata":
         v = float(realtime.get("price") or 0)
         if v > 0:
             spot_for_entry = v
+            # Capture gap for future fallback (when twelvedata quota hits etc.)
+            if df_close_now is not None:
+                gap = df_close_now - v
+                if 1.0 < gap < 30.0:
+                    _save_premium_gap(gap)
             log(f"[runner] entry-base spot=${v:.2f} (twelvedata real-time)")
-    if spot_for_entry is None and df_5m is not None and len(df_5m) > 0:
-        df_close_now = float(df_5m["close"].iloc[-1])
-        spot_for_entry = round(df_close_now - DEFAULT_PREMIUM, 2)
-        log(f"[runner] entry-base spot=${spot_for_entry:.2f} (estimated: GC=F ${df_close_now:.2f} - ${DEFAULT_PREMIUM:.2f} premium)")
+
+    if spot_for_entry is None and df_close_now is not None:
+        gap = _load_premium_gap()
+        spot_for_entry = round(df_close_now - gap, 2)
+        log(f"[runner] entry-base spot=${spot_for_entry:.2f} (estimated: GC=F ${df_close_now:.2f} - ${gap:.2f} premium [adaptive])")
 
     # Per-style strategy results (rule-based, deterministic)
     def _ctx(df_p, df_h):
@@ -189,11 +219,19 @@ def run_once(store: SettingsStore, settings: dict, log=print, trigger_reason: st
             traceback.print_exc()
             debate_dict = _rule_debate_dict(df_1h, df_4h, inter, cot, sess, in_blk, blk_evt)
 
-    # xau_price: prefer real-time spot, fallback to last 1h close
-    xau_price_value = realtime.get("price")
-    if xau_price_value is None or xau_price_value <= 0:
-        xau_price_value = float(df_1h["close"].iloc[-1])
-        realtime["source"] = "yfinance_close"
+    # xau_price: use the SAME spot estimate as strategy entry base (consistent
+    # with signal levels). Hero card "big price" should match signal entries,
+    # not GC=F futures close (was the source of "$4709.70 vs entry $4705.50"
+    # confusion the user flagged).
+    if spot_for_entry and spot_for_entry > 0:
+        xau_price_value = spot_for_entry
+        if realtime.get("source") != "twelvedata":
+            realtime["source"] = "estimated_spot"
+    else:
+        xau_price_value = realtime.get("price")
+        if xau_price_value is None or xau_price_value <= 0:
+            xau_price_value = float(df_1h["close"].iloc[-1])
+            realtime["source"] = "yfinance_close"
 
     bundle = {
         "timestamp":         now.isoformat(),
