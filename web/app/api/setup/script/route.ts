@@ -43,6 +43,9 @@ param(
     [Parameter(Mandatory=$false)] [string] $SupabaseServiceKey = "",
     [Parameter(Mandatory=$false)] [string] $OpenRouterKey      = "",
     [Parameter(Mandatory=$false)] [string] $TwelveDataKey      = "",
+    [Parameter(Mandatory=$false)] [string] $VapidPublicKey     = "",
+    [Parameter(Mandatory=$false)] [string] $VapidPrivateKey    = "",
+    [Parameter(Mandatory=$false)] [string] $VapidSubject       = "",
     [Parameter(Mandatory=$false)] [string] $UserId      = "default",
     [Parameter(Mandatory=$false)] [string] $Port        = "${DEFAULT_PORT}",
     [Parameter(Mandatory=$false)] [string] $WorkerId    = "",
@@ -419,6 +422,9 @@ try {
     $finalOpenRouter = Resolve-EnvValue $OpenRouterKey      "OPENROUTER_API_KEY"
     $finalTwelve     = Resolve-EnvValue $TwelveDataKey      "TWELVE_DATA_API_KEY"
     $finalUserId     = Resolve-EnvValue $UserId             "DAEMON_USER_ID"
+    $finalVapidPub   = Resolve-EnvValue $VapidPublicKey     "VAPID_PUBLIC_KEY"
+    $finalVapidPriv  = Resolve-EnvValue $VapidPrivateKey    "VAPID_PRIVATE_KEY"
+    $finalVapidSubj  = Resolve-EnvValue $VapidSubject       "VAPID_SUBJECT"
     $finalPort       = Resolve-EnvValue $Port               "DAEMON_PORT"
     $finalWorkerId   = Resolve-EnvValue $WorkerId           "DAEMON_WORKER_ID"
 
@@ -456,6 +462,12 @@ try {
     } else {
         [void]$EnvLines.Add("# TWELVE_DATA_API_KEY=  # daftar di https://twelvedata.com (gratis)")
     }
+    [void]$EnvLines.Add("")
+    [void]$EnvLines.Add("# Web Push (native browser notification) — required for /more/settings/notifications")
+    [void]$EnvLines.Add("# Generate sekali via: npx web-push generate-vapid-keys --json")
+    if ($finalVapidPub)  { [void]$EnvLines.Add("VAPID_PUBLIC_KEY=$finalVapidPub") }   else { [void]$EnvLines.Add("# VAPID_PUBLIC_KEY=") }
+    if ($finalVapidPriv) { [void]$EnvLines.Add("VAPID_PRIVATE_KEY=$finalVapidPriv") } else { [void]$EnvLines.Add("# VAPID_PRIVATE_KEY=") }
+    if ($finalVapidSubj) { [void]$EnvLines.Add("VAPID_SUBJECT=$finalVapidSubj") }     else { [void]$EnvLines.Add("# VAPID_SUBJECT=mailto:lo@email.com") }
 
     $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
     [System.IO.File]::WriteAllLines($envPath, [string[]]$EnvLines, $Utf8NoBom)

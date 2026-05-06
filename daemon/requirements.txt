@@ -24,3 +24,7 @@ psutil>=5.9.0
 # MT5 calls /api/ea/next-signal here every 5s; without these, EA gets nothing.
 fastapi>=0.110.0
 uvicorn>=0.27.0
+
+# Web Push notifications (browser push when STRONG signal). Requires VAPID
+# keys in env (VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT).
+pywebpush>=2.0.0

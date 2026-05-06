@@ -41,34 +41,58 @@ self.addEventListener('fetch', (event) => {
   return
 })
 
-// Push notification handler (phase 2 wiring; harmless no-op if no payload)
+// Push notification handler — fires when daemon (or /api/push/test) posts an
+// encrypted message via the Web Push protocol. Browser already decrypted the
+// payload; we receive plaintext via event.data.
+//
+// Payload formats handled:
+//   - JSON: { title, body, url?, tag? }            ← daemon production push
+//   - Plain text: 'message'                        ← simple fallback
+//   - Empty (no payload): generic "Sinyal baru"    ← /api/push/test
 self.addEventListener('push', (event) => {
-  if (!event.data) return
-  let data = {}
-  try {
-    data = event.data.json()
-  } catch {
-    data = { title: 'yeehee', body: event.data.text() }
+  let data = { title: 'yeehee', body: 'Sinyal baru tersedia' }
+  if (event.data) {
+    try {
+      const parsed = event.data.json()
+      data = { ...data, ...parsed }
+    } catch {
+      try {
+        const t = event.data.text()
+        if (t) data.body = t
+      } catch {/* ignore */}
+    }
   }
-  const title = data.title || 'yeehee signal'
   const opts = {
-    body: data.body || 'New signal received',
-    icon: '/icons/icon.svg',
-    badge: '/icons/icon.svg',
-    tag: data.tag || 'signal',
-    data: data.url || '/',
-    vibrate: [200, 100, 200],
+    body:     data.body || 'Sinyal baru',
+    icon:     data.icon  || '/icons/icon.svg',
+    badge:    data.badge || '/icons/icon.svg',
+    tag:      data.tag   || 'yeehee-signal',
+    data:     { url: data.url || '/', ts: Date.now() },
+    requireInteraction: data.requireInteraction === true,
+    vibrate:  data.vibrate || [200, 100, 200],
+    silent:   false,
   }
-  event.waitUntil(self.registration.showNotification(title, opts))
+  event.waitUntil(self.registration.showNotification(data.title || 'yeehee signal', opts))
 })
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()
-  const url = event.notification.data || '/'
-  event.waitUntil(self.clients.matchAll({ type: 'window' }).then((clients) => {
-    for (const c of clients) {
-      if ('focus' in c) return c.focus()
+  const targetUrl = (event.notification.data && event.notification.data.url) || '/'
+  event.waitUntil((async () => {
+    // Focus existing tab if open, else open new one
+    const allClients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+    for (const c of allClients) {
+      try {
+        const u = new URL(c.url)
+        if (u.origin === self.location.origin) {
+          await c.focus()
+          if ('navigate' in c) {
+            await c.navigate(targetUrl)
+          }
+          return
+        }
+      } catch {/* ignore */}
     }
-    return self.clients.openWindow(url)
-  }))
+    await self.clients.openWindow(targetUrl)
+  })())
 })

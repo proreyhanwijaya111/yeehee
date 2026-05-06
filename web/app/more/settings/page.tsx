@@ -2,7 +2,7 @@
 import Link from 'next/link'
 import { useEffect, useState } from 'react'
 import {
-  ArrowLeft, Cpu, Brain, Server, Send, Sliders, ChevronRight,
+  ArrowLeft, Cpu, Brain, Server, Send, Sliders, ChevronRight, Bell,
 } from 'lucide-react'
 import {
   getAppSettings,
@@ -127,10 +127,17 @@ export default function SettingsHubPage() {
           {/* === Notifikasi === */}
           <Group title="Notifikasi">
             <Row
+              href="/more/settings/notifications"
+              icon={<Bell size={16} />}
+              label="Push notifikasi HP (NEW)"
+              sub="Native browser push — STRONG signal langsung muncul di HP"
+              status="ok"
+            />
+            <Row
               href="/more/settings/telegram"
               icon={<Send size={16} />}
               label="Telegram bot"
-              sub="Push notifikasi sinyal ke HP via Telegram"
+              sub="Push notifikasi sinyal + interactive command via Telegram"
             />
           </Group>
         </div>

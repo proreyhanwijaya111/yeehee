@@ -47,6 +47,13 @@ try:
 except ImportError:
     TG_PUSH_AVAILABLE = False
 
+# Web Push (native browser notif) — optional, requires VAPID env + pywebpush
+try:
+    from notify.web_push import maybe_push_web_signal
+    WEB_PUSH_AVAILABLE = True
+except ImportError:
+    WEB_PUSH_AVAILABLE = False
+
 
 def run_once(store: SettingsStore, settings: dict, log=print, trigger_reason: str = "scheduled") -> dict:
     """Run one signal cycle. Returns the bundle dict.
@@ -327,6 +334,33 @@ def run_once(store: SettingsStore, settings: dict, log=print, trigger_reason: st
                 # else silent (most cycles don't trigger; spam-protected)
             except Exception as e:
                 log(f"[telegram] push error: {e!r}")
+
+        # ── Web Push (native browser notification) ─────────────────────────
+        # Same eligibility threshold as Telegram (STRONG debate OR strong RCS).
+        # Reuses the Telegram push debounce logic above so we don't spam.
+        # Only fires if (a) pywebpush installed (b) VAPID keys set (c) at least
+        # 1 active subscription in push_subscriptions table.
+        if WEB_PUSH_AVAILABLE:
+            try:
+                # Mirror the push.py eligibility gate so we don't push every cycle
+                debate_ = bundle.get("debate") or {}
+                rcs_    = bundle.get("rcs") or {}
+                strength_ = debate_.get("signal_strength", "FLAT")
+                conf_     = float(debate_.get("confidence") or 0)
+                rcs_dir_  = (rcs_ or {}).get("direction") or "WAIT"
+                rcs_conf_ = int((rcs_ or {}).get("confidence_pct") or 0)
+                eligible = (
+                    (strength_ in ("STRONG", "NEWS_STRONG") and conf_ >= 0.65)
+                    or (rcs_dir_ in ("LONG", "SHORT") and rcs_conf_ >= 70)
+                )
+                if eligible:
+                    web_result = maybe_push_web_signal(store, bundle, log=log)
+                    if web_result.get("pushed"):
+                        log(f"[web-push] pushed: {web_result['reason']}")
+                    elif web_result.get("reason") not in ("no subscriptions",):
+                        log(f"[web-push] skipped: {web_result['reason']}")
+            except Exception as e:
+                log(f"[web-push] error: {e!r}")
 
         # ── Drift detection (Phase v0.3) ──────────────────────────────────
         # Compare live feature distribution vs training reference snapshot.
