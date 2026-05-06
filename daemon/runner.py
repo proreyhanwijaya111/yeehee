@@ -349,22 +349,29 @@ def run_once(store: SettingsStore, settings: dict, log=print, trigger_reason: st
                 log(f"[telegram] push error: {e!r}")
 
         # ── Web Push (native browser notification) ─────────────────────────
-        # Same eligibility threshold as Telegram (STRONG debate OR strong RCS).
-        # Reuses the Telegram push debounce logic above so we don't spam.
-        # Only fires if (a) pywebpush installed (b) VAPID keys set (c) at least
-        # 1 active subscription in push_subscriptions table.
+        # Eligibility mirrors notify/push.py:
+        #   A) Debate STRONG conf ≥0.65, OR
+        #   B) RCS direction conf ≥70%, OR
+        #   C) Any per-style signal directional with conf ≥ ea_min_confidence_pct
+        #      (so notif fires whenever EA would promote a trade)
         if WEB_PUSH_AVAILABLE:
             try:
-                # Mirror the push.py eligibility gate so we don't push every cycle
-                debate_ = bundle.get("debate") or {}
-                rcs_    = bundle.get("rcs") or {}
+                debate_   = bundle.get("debate") or {}
+                rcs_      = bundle.get("rcs") or {}
                 strength_ = debate_.get("signal_strength", "FLAT")
                 conf_     = float(debate_.get("confidence") or 0)
                 rcs_dir_  = (rcs_ or {}).get("direction") or "WAIT"
                 rcs_conf_ = int((rcs_ or {}).get("confidence_pct") or 0)
+                ea_min    = float(settings.get("ea_min_confidence_pct") or 55) / 100.0
+                eligible_style = any(
+                    (bundle.get(k) or {}).get("side") in ("LONG", "SHORT")
+                    and float((bundle.get(k) or {}).get("confidence") or 0) >= ea_min
+                    for k in ("scalper", "intraday", "swing")
+                )
                 eligible = (
                     (strength_ in ("STRONG", "NEWS_STRONG") and conf_ >= 0.65)
                     or (rcs_dir_ in ("LONG", "SHORT") and rcs_conf_ >= 70)
+                    or eligible_style
                 )
                 if eligible:
                     web_result = maybe_push_web_signal(store, bundle, log=log)

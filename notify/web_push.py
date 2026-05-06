@@ -42,14 +42,29 @@ def _format_payload(bundle: dict) -> dict:
     price = bundle.get("xau_price", 0)
     regime = bundle.get("regime", "?")
 
+    # Find directional per-style with levels. Priority: matching debate dir,
+    # else any non-FLAT per-style (so push fires when debate FLAT but style hot).
     sig_for_levels = None
-    for k in ("intraday", "scalper", "swing"):
-        s = bundle.get(k) or {}
-        if s.get("side") == action and s.get("entry"):
-            sig_for_levels = s
-            break
+    sig_style = None
+    if action in ("LONG", "SHORT"):
+        for k in ("intraday", "scalper", "swing"):
+            s = bundle.get(k) or {}
+            if s.get("side") == action and s.get("entry"):
+                sig_for_levels = s; sig_style = k
+                break
+    if sig_for_levels is None:
+        for k in ("intraday", "scalper", "swing"):
+            s = bundle.get(k) or {}
+            if s.get("side") in ("LONG", "SHORT") and s.get("entry"):
+                sig_for_levels = s; sig_style = k
+                break
 
-    title = f"{action} XAU · {strength}"
+    header_action = action if action in ("LONG", "SHORT") else (
+        sig_for_levels.get("side") if sig_for_levels else action
+    )
+
+    title_suffix = f" · {sig_style}" if sig_style and action == "FLAT" else ""
+    title = f"{header_action} XAU · {strength}{title_suffix}"
     body_parts = [f"${price:.2f} · conf {int(conf*100)}% · regime {regime}"]
     if sig_for_levels:
         body_parts.append(
@@ -62,7 +77,7 @@ def _format_payload(bundle: dict) -> dict:
     return {
         "title": title,
         "body":  "\n".join(body_parts),
-        "tag":   f"sig-{action}-{int(price)}",
+        "tag":   f"sig-{header_action}-{int(price)}",
         "url":   "/portfolio",
         "requireInteraction": False,
     }

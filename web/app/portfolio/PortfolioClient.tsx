@@ -4,7 +4,7 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import {
   ArrowLeft, Briefcase, Activity, Target, Zap, Waves,
-  CheckCircle2, Hourglass, type LucideIcon, Clock, RotateCcw, Loader2,
+  CheckCircle2, Hourglass, type LucideIcon, Clock, RotateCcw, Loader2, X,
 } from 'lucide-react'
 import {
   type ActiveTrade, type PortfolioStats, type TradeStatus,
@@ -223,7 +223,9 @@ export default function PortfolioClient({ openTrades, closedTrades, stats, xauPr
 
         {filteredOpen.length > 0 ? (
           <Group title={`Active trades (${filteredOpen.length})`}>
-            {filteredOpen.map(t => <TradeRow key={t.id} trade={t} live xauPrice={xauPrice} />)}
+            {filteredOpen.map(t => (
+              <TradeRow key={t.id} trade={t} live xauPrice={xauPrice} onRefresh={() => router.refresh()} />
+            ))}
           </Group>
         ) : (
           <Group title="Active trades">
@@ -405,10 +407,36 @@ function EmptyStats() {
   )
 }
 
-function TradeRow({ trade, live, xauPrice }: { trade: ActiveTrade; live?: boolean; xauPrice?: number | null }) {
+function TradeRow({ trade, live, xauPrice, onRefresh }: {
+  trade: ActiveTrade; live?: boolean; xauPrice?: number | null; onRefresh?: () => void
+}) {
   // Default-expanded for OPEN trades (user wants live tracking visible),
   // collapsed for closed trades (history scan-friendly, tap to expand chart).
   const [expanded, setExpanded] = useState(Boolean(live))
+  const [closing, setClosing]   = useState(false)
+
+  const handleManualClose = async (e: React.MouseEvent) => {
+    e.stopPropagation()  // don't toggle expand
+    if (!confirm(`Tutup manual trade ${trade.style.toUpperCase()} ${trade.side}?\n\nHarga keluar = spot terkini. Akan tercatat MANUAL CLOSE.`)) return
+    setClosing(true)
+    try {
+      const r = await fetch('/api/portfolio/close', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ trade_id: trade.id }),
+      })
+      const j = await r.json()
+      if (!r.ok || !j.ok) {
+        alert(`Gagal close: ${j.error || r.statusText}`)
+      } else {
+        if (onRefresh) onRefresh()
+      }
+    } catch (err) {
+      alert(`Error: ${String(err)}`)
+    } finally {
+      setClosing(false)
+    }
+  }
   const Icon = STYLE_ICON[trade.style] ?? Target
   const tone = STATUS_TONE[trade.status]
   const sideColor = trade.side === 'LONG' ? 'text-emerald-300' : 'text-rose-300'
@@ -462,6 +490,17 @@ function TradeRow({ trade, live, xauPrice }: { trade: ActiveTrade; live?: boolea
               pnlPct >= 0 ? 'text-emerald-300' : 'text-rose-300')}>
               {fmtPctSigned(pnlPct)}
             </p>
+          )}
+          {live && (
+            <button
+              onClick={handleManualClose}
+              disabled={closing}
+              className="mt-1 px-2 py-0.5 rounded bg-rose-900/30 hover:bg-rose-900/60 border border-rose-800/50 text-rose-200 text-[9px] font-bold uppercase tracking-wide flex items-center gap-1 disabled:opacity-50"
+              title="Tutup manual trade ini"
+            >
+              {closing ? <Loader2 size={9} className="animate-spin" /> : <X size={9} />}
+              {closing ? 'tutup...' : 'tutup'}
+            </button>
           )}
         </div>
       </div>

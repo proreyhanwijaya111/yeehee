@@ -120,17 +120,39 @@ def _format_alert(bundle: dict) -> str:
     price = bundle.get("xau_price", 0)
     regime = bundle.get("regime", "?")
 
-    # Find a directional signal with concrete levels (intraday default, fall back to others)
+    # Find a directional signal with concrete levels.
+    # Priority 1: per-style matching debate.action (if debate is directional)
+    # Priority 2: ANY per-style with side != FLAT (debate FLAT but style hot)
     sig_for_levels = None
-    for key in ("intraday", "scalper", "swing"):
-        s = bundle.get(key) or {}
-        if s.get("side") == action and s.get("entry"):
-            sig_for_levels = s
-            break
+    sig_style_label = None
+    if action in ("LONG", "SHORT"):
+        for key in ("intraday", "scalper", "swing"):
+            s = bundle.get(key) or {}
+            if s.get("side") == action and s.get("entry"):
+                sig_for_levels = s
+                sig_style_label = key
+                break
+    if sig_for_levels is None:
+        # Fallback: any non-FLAT per-style (debate may be FLAT but style strong)
+        for key in ("intraday", "scalper", "swing"):
+            s = bundle.get(key) or {}
+            if s.get("side") in ("LONG", "SHORT") and s.get("entry"):
+                sig_for_levels = s
+                sig_style_label = key
+                break
+
+    # Header: prefer per-style direction if debate is FLAT (more actionable)
+    header_action = action if action in ("LONG", "SHORT") else (
+        sig_for_levels.get("side") if sig_for_levels else action
+    )
+    header_conf = conf if action in ("LONG", "SHORT") else (
+        float(sig_for_levels.get("confidence") or 0) if sig_for_levels else 0
+    )
 
     parts = [
         f"<b>🪙 yeehee signal alert</b>",
-        f"{_emoji_action(action)} <b>XAU {action}</b> · {strength} · conf {conf:.0%}",
+        f"{_emoji_action(header_action)} <b>XAU {header_action}</b> · {strength} · conf {header_conf:.0%}"
+        + (f" ({sig_style_label})" if sig_style_label and action == 'FLAT' else ""),
         f"💰 ${price:.2f}  ·  Regime: <b>{regime}</b>",
     ]
 
@@ -183,6 +205,13 @@ def maybe_push_signal(store, bundle: dict, log=print) -> dict:
 
     Returns dict {pushed: bool, reason: str, recipients: int}.
     Caller should not block on this — fire-and-log.
+
+    Eligibility (any one):
+      A) Debate STRONG with conf ≥ DEFAULT_MIN_CONFIDENCE_DEBATE (0.65)
+      B) RCS direction with conf_pct ≥ DEFAULT_MIN_CONFIDENCE_RCS (70)
+      C) ANY per-style signal (scalper/intraday/swing) with side != FLAT
+         AND confidence ≥ ea_min_confidence_pct (default 0.55) — same gate
+         that promotes signal to EA. If EA executes, user wants notif.
     """
     out = {"pushed": False, "reason": "", "recipients": 0}
 
@@ -194,11 +223,32 @@ def maybe_push_signal(store, bundle: dict, log=print) -> dict:
     rcs_conf_pct = int(rcs.get("confidence_pct") or 0)
     rcs_dir = rcs.get("direction") or "WAIT"
 
-    # Eligibility: STRONG debate OR strong RCS
     eligible_debate = strength in ("STRONG", "NEWS_STRONG") and conf >= DEFAULT_MIN_CONFIDENCE_DEBATE
     eligible_rcs    = rcs_dir in ("LONG", "SHORT") and rcs_conf_pct >= DEFAULT_MIN_CONFIDENCE_RCS
-    if not (eligible_debate or eligible_rcs):
-        out["reason"] = f"not eligible: debate={strength}/{conf:.2f}, rcs={rcs_dir}/{rcs_conf_pct}"
+
+    # Per-style gate — same threshold as EA promote so notif tracks executions
+    eligible_style = False
+    style_signal_for_alert = None
+    try:
+        ea_min_conf = float(
+            (store.app_settings() if store else {}).get("ea_min_confidence_pct") or 55
+        ) / 100.0
+    except Exception:
+        ea_min_conf = 0.55
+    for key in ("scalper", "intraday", "swing"):
+        s = bundle.get(key) or {}
+        side = s.get("side", "FLAT")
+        conf_s = float(s.get("confidence") or 0)
+        if side in ("LONG", "SHORT") and conf_s >= ea_min_conf:
+            eligible_style = True
+            style_signal_for_alert = (key, s, conf_s)
+            break  # first qualifying style wins
+
+    if not (eligible_debate or eligible_rcs or eligible_style):
+        out["reason"] = (
+            f"not eligible: debate={strength}/{conf:.2f}, "
+            f"rcs={rcs_dir}/{rcs_conf_pct}, no per-style ≥ {ea_min_conf*100:.0f}%"
+        )
         return out
 
     # Resolve credentials
