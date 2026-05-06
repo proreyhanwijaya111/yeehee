@@ -51,17 +51,32 @@ export async function middleware(req: NextRequest) {
   if (isPublic(pathname)) {
     return NextResponse.next()
   }
-  const cookie = req.cookies.get('yeehee_session')?.value
-  const valid = await verifyCookie(cookie)
+
+  // Defensive: any unexpected error in cookie verification should NOT crash
+  // the middleware (which would cause ERR_CONNECTION_ABORTED in PWA standalone
+  // mode). Treat verify failure as "not logged in" and redirect to /login.
+  let valid = false
+  try {
+    const cookie = req.cookies.get('yeehee_session')?.value
+    valid = await verifyCookie(cookie)
+  } catch {
+    valid = false
+  }
+
   if (valid) {
     return NextResponse.next()
   }
-  // Redirect to login with `next` param
+
+  // Redirect to login with `next` param. Build absolute URL using request
+  // origin so PWA standalone mode handles it correctly (don't rely on relative).
   const loginUrl = new URL('/login', req.url)
-  if (pathname !== '/') {
+  if (pathname !== '/' && pathname !== '/login') {
     loginUrl.searchParams.set('next', pathname + (req.nextUrl.search || ''))
   }
-  return NextResponse.redirect(loginUrl)
+  const res = NextResponse.redirect(loginUrl)
+  // Prevent stale cache from serving old failed responses to PWA
+  res.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate')
+  return res
 }
 
 // Skip static files at the matcher level so middleware doesn't run unnecessarily

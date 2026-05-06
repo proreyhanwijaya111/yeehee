@@ -1,7 +1,12 @@
 'use client'
 import { useState, useEffect, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { TrendingUp, Lock, User, Loader2, Eye, EyeOff } from 'lucide-react'
+import { TrendingUp, Lock, User, Loader2, Eye, EyeOff, Download } from 'lucide-react'
+
+interface BeforeInstallPromptEvent extends Event {
+  prompt(): Promise<void>
+  userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>
+}
 
 /**
  * Trader-themed login page. Dark + amber/gold accents, animated candlestick
@@ -42,6 +47,31 @@ function LoginForm() {
   const [showPwd,  setShowPwd]  = useState(false)
   const [loading,  setLoading]  = useState(false)
   const [error,    setError]    = useState('')
+
+  // PWA install state — captures beforeinstallprompt event so we can show
+  // a custom Install button (Chrome's auto banner is unreliable on Android).
+  const [installEvent, setInstallEvent] = useState<BeforeInstallPromptEvent | null>(null)
+  const [isStandalone, setIsStandalone] = useState(false)
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    setIsStandalone(window.matchMedia?.('(display-mode: standalone)').matches || false)
+    const handler = (e: Event) => {
+      e.preventDefault()
+      setInstallEvent(e as BeforeInstallPromptEvent)
+    }
+    window.addEventListener('beforeinstallprompt', handler)
+    return () => window.removeEventListener('beforeinstallprompt', handler)
+  }, [])
+
+  const handleInstall = async () => {
+    if (!installEvent) return
+    await installEvent.prompt()
+    const choice = await installEvent.userChoice
+    if (choice.outcome === 'accepted') {
+      setInstallEvent(null)
+    }
+  }
 
   // If already authenticated (cookie present), bounce to next.
   useEffect(() => {
@@ -184,6 +214,23 @@ function LoginForm() {
             </div>
           </details>
         </form>
+
+        {/* PWA install prompt — shows when Chrome fires beforeinstallprompt */}
+        {installEvent && !isStandalone && (
+          <button
+            onClick={handleInstall}
+            type="button"
+            className="mt-4 w-full py-2.5 rounded-xl bg-slate-900/70 border border-amber-700/40 hover:border-amber-600/60 text-amber-200 text-[11px] font-semibold flex items-center justify-center gap-2 transition-colors"
+          >
+            <Download size={13} />
+            Install yeehee ke home screen
+          </button>
+        )}
+        {isStandalone && (
+          <p className="mt-4 text-center text-[10px] text-emerald-400/80">
+            ✓ Berjalan dalam mode standalone PWA
+          </p>
+        )}
 
         <p className="text-center text-[10px] text-slate-600 mt-5">
           v1.0 · personal use only · {new Date().getFullYear()}
