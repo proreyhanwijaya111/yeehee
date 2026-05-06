@@ -194,6 +194,31 @@ def latest_price(symbol: str = TICKERS["xau"]) -> Optional[float]:
         return None
 
 
+# ── Real-time spot XAU/USD via MT5 broker (Tier 0, most accurate) ───────────
+# DextradeEA.mq5 POSTs current Bid/Ask to /api/spot/post on its FastAPI server
+# every 5s. Daemon (running on same PC) GETs from /api/spot/latest. This is
+# BROKER-GRADE spot — same number Exness shows in MT5. Zero gap.
+
+def fetch_mt5_spot() -> Optional[float]:
+    """Fetch broker mid-price from MT5 EA via FastAPI mirror.
+    Returns None if no spot posted in last 60s, or FastAPI down.
+    """
+    base = os.environ.get("EA_API_URL", "http://localhost:8001").rstrip("/")
+    try:
+        r = requests.get(f"{base}/api/spot/latest", timeout=3)
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        if not data.get("ok"):
+            return None
+        mid = data.get("mid")
+        if mid and float(mid) > 0:
+            return float(mid)
+    except Exception:
+        return None
+    return None
+
+
 # ── Real-time spot XAU/USD via Yahoo HTTPS (XAUUSD=X) ─────────────────────────
 # Uses /v8/finance/chart endpoint directly. yfinance Python lib 404s on
 # XAUUSD=X but the underlying HTTPS endpoint serves it fine. This matches

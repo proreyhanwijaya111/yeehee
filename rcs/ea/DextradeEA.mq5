@@ -85,6 +85,7 @@ double   g_starting_balance      = 0;
 bool     g_kill_switch_active    = false;
 datetime g_last_heartbeat        = 0;
 datetime g_last_config_poll      = 0;
+datetime g_last_spot_post        = 0;
 int      g_config_poll_interval  = 60;   // refresh API config every 60s
 
 // ============================================================================
@@ -180,6 +181,14 @@ void OnTimer()
     {
         SendHeartbeat(false);
         g_last_heartbeat = TimeCurrent();
+    }
+
+    // Mirror broker spot every 5s — daemon uses this as Tier 0 spot source
+    // (most accurate, zero gap from broker quote).
+    if(TimeCurrent() - g_last_spot_post >= 5)
+    {
+        PostSpot();
+        g_last_spot_post = TimeCurrent();
     }
 
     // Daily trade cap check
@@ -438,6 +447,21 @@ void SendHeartbeat(bool is_paused)
         CountOurPositions(), is_paused ? "true" : "false"
     );
     HttpPost(ApiBaseUrl + "/api/ea/heartbeat", body);
+}
+
+// Mirror broker bid/ask to daemon's spot endpoint. Daemon uses this as Tier 0
+// spot source (broker-grade, zero gap, beats Twelve Data + Yahoo + adaptive).
+void PostSpot()
+{
+    string sym = Symbol();
+    double bid = SymbolInfoDouble(sym, SYMBOL_BID);
+    double ask = SymbolInfoDouble(sym, SYMBOL_ASK);
+    if(bid <= 0 || ask <= 0) return;
+    string body = StringFormat(
+        "{\"bid\":%.3f,\"ask\":%.3f,\"symbol\":\"%s\",\"ea_id\":\"%s\"}",
+        bid, ask, sym, EaInstanceId
+    );
+    HttpPost(ApiBaseUrl + "/api/spot/post", body);
 }
 
 void ReportPaperExecuted(long signal_id, string direction, double lot, double entry, double sl, double tp)

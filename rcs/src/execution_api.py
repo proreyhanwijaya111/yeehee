@@ -148,6 +148,55 @@ def healthz():
         return {"status": "degraded", "reason": str(e)[:100]}
 
 
+# ─── MT5 spot mirror (broker-grade real-time spot) ─────────────────────────
+# DextradeEA.mq5 POSTs current Bid+Ask every 5s; daemon GETs latest as Tier 0
+# spot source. Cached in-memory (no Supabase round-trip needed — sub-ms latency).
+
+_SPOT_CACHE: dict = {"bid": None, "ask": None, "ts": None, "ts_unix": 0.0}
+
+
+class SpotPost(BaseModel):
+    bid: float
+    ask: float
+    symbol: Optional[str] = "XAUUSD"
+    ea_id:  Optional[str] = None
+
+
+@app.post("/api/spot/post")
+def post_spot(payload: SpotPost):
+    """EA POSTs current broker spot. No auth (localhost-only network)."""
+    if payload.bid <= 0 or payload.ask <= 0:
+        raise HTTPException(status_code=400, detail="bid/ask must be > 0")
+    if payload.ask < payload.bid:
+        raise HTTPException(status_code=400, detail="ask < bid invalid")
+    import time as _time
+    _SPOT_CACHE["bid"] = payload.bid
+    _SPOT_CACHE["ask"] = payload.ask
+    _SPOT_CACHE["mid"] = (payload.bid + payload.ask) / 2.0
+    _SPOT_CACHE["ts"]  = datetime.now(timezone.utc).isoformat()
+    _SPOT_CACHE["ts_unix"] = _time.time()
+    return {"ok": True, "received": {"bid": payload.bid, "ask": payload.ask}}
+
+
+@app.get("/api/spot/latest")
+def get_spot():
+    """Daemon polls this. Returns broker spot if posted within 60s, else stale."""
+    import time as _time
+    if not _SPOT_CACHE.get("ts_unix"):
+        return {"ok": False, "reason": "no spot posted yet"}
+    age_s = _time.time() - _SPOT_CACHE["ts_unix"]
+    if age_s > 60:
+        return {"ok": False, "reason": "spot stale", "age_s": round(age_s, 1)}
+    return {
+        "ok":     True,
+        "bid":    _SPOT_CACHE["bid"],
+        "ask":    _SPOT_CACHE["ask"],
+        "mid":    _SPOT_CACHE["mid"],
+        "ts":     _SPOT_CACHE["ts"],
+        "age_s":  round(age_s, 1),
+    }
+
+
 @app.get("/api/ea/next-signal")
 def get_next_signal(ea: str = Query(..., description="EA instance ID")):
     """EA polling endpoint. Returns oldest PENDING_PICKUP signal + claims it.

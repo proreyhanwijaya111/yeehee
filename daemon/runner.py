@@ -6,7 +6,7 @@ import time
 import traceback
 from datetime import datetime, timezone
 
-from data.price_fetcher import fetch_xau, fetch_intermarket_bundle, fetch_realtime_xau_spot, fetch_yahoo_spot
+from data.price_fetcher import fetch_xau, fetch_intermarket_bundle, fetch_realtime_xau_spot, fetch_yahoo_spot, fetch_mt5_spot
 from daemon.trade_tracker import open_trade_if_eligible, update_open_trades
 from daemon.heartbeat import get_worker_id
 from data.calendar_fetcher import in_news_blackout, upcoming_high_impact
@@ -120,7 +120,18 @@ def run_once(store: SettingsStore, settings: dict, log=print, trigger_reason: st
         except Exception:
             pass
 
-    if realtime.get("source") == "twelvedata":
+    # TIER 0: MT5 broker mirror via DextradeEA → FastAPI /api/spot/latest.
+    # If EA is running and posting spot, this is BROKER-GRADE accurate ($0 gap).
+    mt5_spot = fetch_mt5_spot()
+    if mt5_spot and mt5_spot > 0:
+        spot_for_entry = mt5_spot
+        if df_close_now is not None:
+            gap = df_close_now - mt5_spot
+            if 1.0 < gap < 30.0:
+                _save_premium_gap(gap)
+        log(f"[runner] entry-base spot=${mt5_spot:.2f} (mt5 broker mirror)")
+
+    if spot_for_entry is None and realtime.get("source") == "twelvedata":
         v = float(realtime.get("price") or 0)
         if v > 0:
             spot_for_entry = v
