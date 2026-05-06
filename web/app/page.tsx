@@ -10,15 +10,17 @@ export const revalidate = 60
 export default async function HomePage() {
   let initialBundle = null
   let serverError: string | null = null
-  const [bundleResult, openTrades, stats, rcs] = await Promise.all([
+  const [bundleResult, openTrades, allTrades, stats, rcs] = await Promise.all([
     getLatestSignalBundle().catch((e) => {
       serverError = e instanceof Error ? e.message : 'Failed to load initial signal'
       return null
     }),
     getActiveTrades({ status: 'OPEN', limit: 10 }).catch(() => []),
+    getActiveTrades({ status: 'all', limit: 100 }).catch(() => []),
     getPortfolioStats().catch(() => null),
     getLatestRcsSignal('M15').catch(() => null),
   ])
+  const closedTrades = allTrades.filter(t => t.status !== 'OPEN')
   initialBundle = bundleResult
   // RCS priority: 1) baked into signal_bundles row (migration 012), 2) fallback
   // to latest rcs_signals row. If bundle already has rcs, keep it.
@@ -43,6 +45,7 @@ export default async function HomePage() {
       initialBundle={initialBundle}
       serverError={serverError}
       openTrades={openTrades}
+      closedTrades={closedTrades}
       portfolioStats={stats}
     />
   )

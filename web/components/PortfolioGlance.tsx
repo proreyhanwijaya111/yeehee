@@ -5,8 +5,18 @@ import {
 import type { PortfolioStats, ActiveTrade } from '@/lib/server-api'
 
 interface Props {
-  stats:       PortfolioStats | null
-  openTrades:  ActiveTrade[]
+  stats:        PortfolioStats | null
+  openTrades:   ActiveTrade[]
+  closedTrades?: ActiveTrade[]
+}
+
+// Same default as PortfolioClient — keeps Beranda + /portfolio in sync.
+const DEFAULT_RISK_PCT = 0.01
+
+function pctFromR(r: number | null | undefined, riskPct: number | null | undefined): number {
+  if (r === null || r === undefined) return 0
+  const rp = riskPct ?? DEFAULT_RISK_PCT
+  return r * rp * 100
 }
 
 /**
@@ -20,13 +30,30 @@ interface Props {
  *
  * Click → /portfolio.
  */
-export default function PortfolioGlance({ stats, openTrades }: Props) {
+export default function PortfolioGlance({ stats, openTrades, closedTrades = [] }: Props) {
   const openCount = openTrades.length
   const longs   = openTrades.filter(t => t.side === 'LONG').length
   const shorts  = openTrades.filter(t => t.side === 'SHORT').length
-  const closed  = stats?.closed_count ?? 0
-  const winrate = (stats?.win_rate ?? 0) * 100
-  const totalR  = stats?.total_pnl_r ?? 0
+
+  // Compute fully client-side from closedTrades — matches /portfolio page logic
+  // exactly (which also computes pctStats from closedTrades). Eliminates
+  // mismatch caused by server view's win_rate using wrong denominator.
+  let n = 0, wins = 0, losses = 0, totalPct = 0
+  for (const t of closedTrades) {
+    n++
+    const pct = pctFromR(t.pnl_r, t.risk_pct)
+    totalPct += pct
+    if (pct > 0)      wins++
+    else if (pct < 0) losses++
+    // pct == 0 (BEP/manual) excluded from both
+  }
+  // Fallback to server stats only if no closedTrades passed
+  const closed = n > 0 ? n : (stats?.closed_count ?? 0)
+  const winrateBase = wins + losses
+  const winrate = winrateBase > 0 ? (wins / winrateBase) * 100
+                  : (stats?.win_rate ?? 0) * 100
+  const totalReturnPct = n > 0 ? totalPct
+                       : (stats?.total_pnl_r ?? 0) * DEFAULT_RISK_PCT * 100
 
   return (
     <Link
@@ -58,10 +85,10 @@ export default function PortfolioGlance({ stats, openTrades }: Props) {
                 value={closed > 0 ? `${winrate.toFixed(0)}%` : '–'}
                 icon={winrate >= 50 ? <TrendingUp size={11} /> : winrate > 0 ? <TrendingDown size={11} /> : null}
                 tone={closed === 0 ? 'neutral' : winrate >= 50 ? 'ok' : 'bad'} />
-          <Stat label="Total R"
-                value={closed > 0 ? `${totalR >= 0 ? '+' : ''}${totalR.toFixed(2)}` : '–'}
-                icon={totalR >= 0 ? <TrendingUp size={11} /> : <TrendingDown size={11} />}
-                tone={closed === 0 ? 'neutral' : totalR >= 0 ? 'ok' : 'bad'} />
+          <Stat label="Return"
+                value={closed > 0 ? `${totalReturnPct >= 0 ? '+' : ''}${totalReturnPct.toFixed(2)}%` : '–'}
+                icon={totalReturnPct >= 0 ? <TrendingUp size={11} /> : <TrendingDown size={11} />}
+                tone={closed === 0 ? 'neutral' : totalReturnPct >= 0 ? 'ok' : 'bad'} />
         </div>
       )}
     </Link>

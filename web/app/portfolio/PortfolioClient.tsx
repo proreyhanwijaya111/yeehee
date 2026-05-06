@@ -195,6 +195,17 @@ export default function PortfolioClient({ openTrades, closedTrades, stats, xauPr
           </div>
         </div>
 
+        {/* Live XAU spot price — gives quick context for active trades below */}
+        {xauPrice !== null && (
+          <div className="bg-gradient-to-br from-amber-900/20 to-amber-950/30 border border-amber-700/30 rounded-xl px-3.5 py-2.5 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+              <p className="text-[10px] text-amber-400/80 uppercase tracking-widest font-semibold">XAU Live</p>
+            </div>
+            <p className="text-base font-black text-amber-100 tabular-nums">${fmtPrice(xauPrice)}</p>
+          </div>
+        )}
+
         {filteredOpen.length > 0 ? (
           <Group title={`Active trades (${filteredOpen.length})`}>
             {filteredOpen.map(t => (

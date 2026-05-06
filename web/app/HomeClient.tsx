@@ -19,11 +19,12 @@ interface Props {
   initialBundle:    SignalBundle | null
   serverError?:     string | null
   openTrades?:      ActiveTrade[]
+  closedTrades?:    ActiveTrade[]
   portfolioStats?:  PortfolioStats | null
 }
 
 export default function HomeClient({
-  initialBundle, serverError, openTrades = [], portfolioStats = null,
+  initialBundle, serverError, openTrades = [], closedTrades = [], portfolioStats = null,
 }: Props) {
   // SWR with fallbackData = no loading flash. Hydrates from server-rendered HTML,
   // then refreshes in background every 5 min. revalidateOnFocus disabled to
@@ -90,7 +91,7 @@ export default function HomeClient({
         <LiveTicker />
 
         {/* Portfolio glance — production-grade quick access to /portfolio */}
-        <PortfolioGlance stats={portfolioStats} openTrades={openTrades} />
+        <PortfolioGlance stats={portfolioStats} openTrades={openTrades} closedTrades={closedTrades} />
 
         {data.in_news_blackout && <NewsAlert type="blackout" event={data.blackout_event} />}
         {!data.in_news_blackout && data.upcoming_events?.[0] && (
