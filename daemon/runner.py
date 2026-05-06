@@ -6,7 +6,7 @@ import time
 import traceback
 from datetime import datetime, timezone
 
-from data.price_fetcher import fetch_xau, fetch_intermarket_bundle, fetch_realtime_xau_spot
+from data.price_fetcher import fetch_xau, fetch_intermarket_bundle, fetch_realtime_xau_spot, fetch_yahoo_spot
 from daemon.trade_tracker import open_trade_if_eligible, update_open_trades
 from daemon.heartbeat import get_worker_id
 from data.calendar_fetcher import in_news_blackout, upcoming_high_impact
@@ -130,6 +130,20 @@ def run_once(store: SettingsStore, settings: dict, log=print, trigger_reason: st
                 if 1.0 < gap < 30.0:
                     _save_premium_gap(gap)
             log(f"[runner] entry-base spot=${v:.2f} (twelvedata real-time)")
+
+    # Tier 2: Yahoo HTTPS XAUUSD=X spot (no API key, no quota, matches broker
+    # ±$0.50 typically). yfinance Python lib 404s on this symbol but the
+    # underlying /v8/finance/chart endpoint works fine.
+    if spot_for_entry is None:
+        yahoo_spot = fetch_yahoo_spot()
+        if yahoo_spot and yahoo_spot > 0:
+            spot_for_entry = yahoo_spot
+            # Also calibrate adaptive premium from this gap
+            if df_close_now is not None:
+                gap = df_close_now - yahoo_spot
+                if 1.0 < gap < 30.0:
+                    _save_premium_gap(gap)
+            log(f"[runner] entry-base spot=${yahoo_spot:.2f} (yahoo XAUUSD=X HTTPS)")
 
     if spot_for_entry is None and df_close_now is not None:
         gap = _load_premium_gap()

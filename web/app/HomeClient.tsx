@@ -109,11 +109,19 @@ export default function HomeClient({
               { style: 'scalper'  as const, sig: data.scalper_signal  },
               { style: 'intraday' as const, sig: data.intraday_signal },
               { style: 'swing'    as const, sig: data.swing_signal    },
-            ].map(({ style, sig }) => (
-              <div key={style} className="min-w-[280px] snap-start">
-                <SignalCard style={style} signal={sig} />
-              </div>
-            ))}
+            ].map(({ style, sig }) => {
+              const isExecuted = openTrades.some(t => t.style === style && t.status === 'OPEN')
+              return (
+                <div key={style} className="min-w-[280px] snap-start">
+                  <SignalCard
+                    style={style}
+                    signal={sig}
+                    bundleTimestamp={data.timestamp}
+                    isExecuted={isExecuted}
+                  />
+                </div>
+              )
+            })}
           </div>
         </div>
 

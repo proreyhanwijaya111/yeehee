@@ -194,6 +194,48 @@ def latest_price(symbol: str = TICKERS["xau"]) -> Optional[float]:
         return None
 
 
+# ── Real-time spot XAU/USD via Yahoo HTTPS (XAUUSD=X) ─────────────────────────
+# Uses /v8/finance/chart endpoint directly. yfinance Python lib 404s on
+# XAUUSD=X but the underlying HTTPS endpoint serves it fine. This matches
+# what TradingView/OANDA quote for retail spot — typically within $0.50 of
+# Exness/IC Markets/etc broker bid/ask.
+
+def fetch_yahoo_spot() -> Optional[float]:
+    """Fetch current XAU/USD spot price via Yahoo HTTPS chart endpoint.
+    Returns None on any failure. NO API KEY REQUIRED."""
+    try:
+        url = "https://query1.finance.yahoo.com/v8/finance/chart/XAUUSD=X"
+        r = requests.get(
+            url,
+            params={"range": "1d", "interval": "1m"},
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Accept":     "application/json",
+            },
+            timeout=8,
+        )
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        results = data.get("chart", {}).get("result") or []
+        if not results:
+            return None
+        meta = results[0].get("meta", {}) or {}
+        price = meta.get("regularMarketPrice")
+        if price is None:
+            # Fallback: use the latest close from the bars
+            ts   = results[0].get("timestamp") or []
+            quote = (results[0].get("indicators", {}).get("quote") or [{}])[0]
+            closes = [c for c in (quote.get("close") or []) if c is not None]
+            if closes:
+                price = closes[-1]
+        if price and float(price) > 0:
+            return float(price)
+    except Exception:
+        return None
+    return None
+
+
 # ── Real-time spot XAU/USD via Twelve Data ─────────────────────────────────────
 
 def fetch_realtime_xau_spot() -> dict:

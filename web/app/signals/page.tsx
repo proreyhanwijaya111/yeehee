@@ -1,19 +1,20 @@
-// Server Component — fetch signal_bundle + RCS in parallel, hydrate client.
+// Server Component — fetch signal_bundle + RCS + open trades in parallel.
 import SignalsClient from './SignalsClient'
-import { getLatestSignalBundle, getLatestRcsSignal } from '@/lib/server-api'
+import { getLatestSignalBundle, getLatestRcsSignal, getActiveTrades } from '@/lib/server-api'
 
 export const revalidate = 60
 
 export default async function SignalsPage() {
   let initialBundle = null
   let serverError: string | null = null
-  // Parallel fetch: bundle + RCS. RCS failure non-fatal (table may not exist yet).
-  const [bundleResult, rcs] = await Promise.all([
+  // Parallel fetch: bundle + RCS + open trades for EXECUTED badge.
+  const [bundleResult, rcs, openTrades] = await Promise.all([
     getLatestSignalBundle().catch((e) => {
       serverError = e instanceof Error ? e.message : 'Failed to load'
       return null
     }),
     getLatestRcsSignal('M15').catch(() => null),
+    getActiveTrades({ status: 'OPEN', limit: 10 }).catch(() => []),
   ])
   initialBundle = bundleResult
   // RCS priority: bundle.rcs (migration 012) > rcs_signals fallback.
@@ -33,5 +34,5 @@ export default async function SignalsPage() {
       session:        '',
     }
   }
-  return <SignalsClient initialBundle={initialBundle} serverError={serverError} />
+  return <SignalsClient initialBundle={initialBundle} serverError={serverError} openTrades={openTrades} />
 }

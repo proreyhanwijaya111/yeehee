@@ -8,13 +8,15 @@ import RcsPanel from '@/components/RcsPanel'
 import { ErrorState } from '@/components/LoadingSpinner'
 import { STRENGTH_LABEL, STRENGTH_COLOR, fmtPrice, formatTriggerReason } from '@/lib/utils'
 import type { SignalBundle } from '@/lib/types'
+import type { ActiveTrade } from '@/lib/server-api'
 
 interface Props {
   initialBundle: SignalBundle | null
   serverError?: string | null
+  openTrades?:  ActiveTrade[]
 }
 
-export default function SignalsClient({ initialBundle, serverError }: Props) {
+export default function SignalsClient({ initialBundle, serverError, openTrades = [] }: Props) {
   const { data, error, mutate } = useSWR(
     'signals',
     () => getSignals('signals'),
@@ -80,9 +82,24 @@ export default function SignalsClient({ initialBundle, serverError }: Props) {
         </div>
 
         <div className="space-y-3">
-          <SignalCard style="scalper"  signal={data.scalper_signal} />
-          <SignalCard style="intraday" signal={data.intraday_signal} />
-          <SignalCard style="swing"    signal={data.swing_signal} />
+          <SignalCard
+            style="scalper"
+            signal={data.scalper_signal}
+            bundleTimestamp={data.timestamp}
+            isExecuted={openTrades.some(t => t.style === 'scalper' && t.status === 'OPEN')}
+          />
+          <SignalCard
+            style="intraday"
+            signal={data.intraday_signal}
+            bundleTimestamp={data.timestamp}
+            isExecuted={openTrades.some(t => t.style === 'intraday' && t.status === 'OPEN')}
+          />
+          <SignalCard
+            style="swing"
+            signal={data.swing_signal}
+            bundleTimestamp={data.timestamp}
+            isExecuted={openTrades.some(t => t.style === 'swing' && t.status === 'OPEN')}
+          />
         </div>
 
         <RcsPanel rcs={data.rcs ?? null} />
