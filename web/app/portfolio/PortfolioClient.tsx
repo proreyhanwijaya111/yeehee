@@ -474,10 +474,14 @@ function EaStatusCard({
               {(() => {
                 const lev = heartbeat?.account_leverage
                 if (lev == null) {
-                  return <>— <span className="text-slate-500 text-[10px]">(EA blm kirim — perlu migration 012 + EA recompile)</span></>
+                  return <>— <span className="text-slate-500 text-[10px]">(EA v0.2.0 / migration 012 belum)</span></>
                 }
-                if (lev <= 0) {
-                  return <>1 : Unlimited <span className="text-slate-500">(broker)</span></>
+                // Exness "Unlimited" reports as ACCOUNT_LEVERAGE=2_000_000_000
+                // (effectively no leverage cap). Display friendly label for any
+                // value > 5000 since real broker leverages cap at 1:5000 in
+                // practice -- anything above is the "unlimited" sentinel.
+                if (lev <= 0 || lev > 5000) {
+                  return <>1 : Unlimited <span className="text-slate-500">(Exness demo)</span></>
                 }
                 return <>1 : {lev.toLocaleString()} <span className="text-slate-500">(broker)</span></>
               })()}

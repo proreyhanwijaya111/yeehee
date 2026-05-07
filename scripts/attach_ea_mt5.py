@@ -85,32 +85,46 @@ def attach_ea(dry_run: bool = False) -> int:
         except Exception:
             pass
 
-    # Find DextradeEA item — pywinauto's TreeView wrapper
-    print("[attach_ea] searching for DextradeEA in TreeView...")
+    # Find DextradeEA SOURCE item (not attached instance).
+    # MT5 tree has SOURCE library "DextradeEA" under "Expert Advisors" parent,
+    # PLUS may have ATTACHED instance "DextradeEA - XAUUSDm,H1" under
+    # "Expert Advisors -> Attached" sub-tree (when EA running on chart).
+    # Need SOURCE for proper attach/replace semantics — not the attached node
+    # (double-click on attached just opens its Properties dialog, doesn't reload).
+    print("[attach_ea] searching for DextradeEA SOURCE in TreeView...")
     found_item = None
     try:
-        # Walk all roots & children
+        # Walk all roots & children. Prefer EXACT match "DextradeEA" (source)
+        # over partial match (e.g. "DextradeEA - XAUUSDm,H1" attached instance).
+        candidates = []  # (item, exact_match_priority)
         def walk(item, depth=0):
             try:
-                txt = item.text()
+                txt = (item.text() or "").strip()
             except Exception:
                 txt = "?"
-            if "DextradeEA" in txt or "Dextrade" in txt:
-                return item
+            if txt == "DextradeEA":
+                candidates.append((item, 0))   # exact = highest priority
+            elif "DextradeEA" in txt:
+                candidates.append((item, 1))   # partial = fallback
             try:
                 for c in item.children():
-                    r = walk(c, depth + 1)
-                    if r:
-                        return r
+                    walk(c, depth + 1)
             except Exception:
                 pass
-            return None
 
         for root in nav_tree.roots():
-            r = walk(root)
-            if r:
-                found_item = r
-                break
+            walk(root)
+
+        # Sort by priority (lower = better), pick first
+        candidates.sort(key=lambda x: x[1])
+        if candidates:
+            found_item = candidates[0][0]
+            try:
+                txt = (found_item.text() or "").strip()
+                print(f"[attach_ea] candidates: {[(c[0].text(), c[1]) for c in candidates]}")
+                print(f"[attach_ea] picked: '{txt}'")
+            except Exception:
+                pass
     except Exception as e:
         print(f"[attach_ea] tree walk error: {e}")
         return 4
@@ -189,6 +203,37 @@ def attach_ea(dry_run: bool = False) -> int:
             pass
         mouse.double_click(coords=(cx, cy))
         time.sleep(2.0)  # confirm dialog appears
+
+        # Handle "EA already running on chart, replace?" prompt that may appear.
+        # Title varies but commonly contains "Expert Advisor" / "DextradeEA".
+        # If detected, click "Yes" / "OK" to confirm replace.
+        replace_prompts = []
+        for w in Desktop(backend="win32").windows():
+            try:
+                if w.process_id() != mt5_main.process_id():
+                    continue
+                txt = (w.window_text() or "").lower()
+                # "MetaTrader 5" general prompt OR DextradeEA-named replacement prompt
+                if ("expert" in txt or "dextrade" in txt or "metatrader" in txt) and len(txt) < 80:
+                    btns = [b for b in w.descendants() if b.class_name() == "Button"]
+                    btn_texts = [(b.window_text() or "").strip().lower() for b in btns]
+                    # Prompt has Yes/No/Cancel? -> click Yes
+                    if any(t in ('yes', '&yes', 'ya') for t in btn_texts):
+                        replace_prompts.append((w, btns, btn_texts))
+            except Exception:
+                continue
+        if replace_prompts:
+            for (w, btns, btn_texts) in replace_prompts:
+                try:
+                    print(f"[attach_ea] replace prompt: '{w.window_text()}' buttons={btn_texts}")
+                    yes_btn = next((b for b in btns if (b.window_text() or "").strip().lower() in ('yes', '&yes', 'ya')), None)
+                    if yes_btn:
+                        yes_btn.click_input()
+                        print(f"[attach_ea] clicked 'Yes' to replace existing EA")
+                        time.sleep(1.5)
+                        break
+                except Exception as e:
+                    print(f"[attach_ea] replace prompt err: {e}")
     except Exception as e:
         print(f"[attach_ea] FAIL double-click: {e}")
         return 5
