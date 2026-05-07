@@ -192,6 +192,79 @@ export async function getDaemonHeartbeatServer(): Promise<{
   }
 }
 
+// ── EA heartbeat (real MT5 demo account) ───────────────────────────────────────
+
+export interface EaHeartbeat {
+  ea_instance_id:   string
+  account_login:    number | null
+  ts:               string
+  account_balance:  number | null
+  account_equity:   number | null
+  open_positions:   number | null
+  is_paused:        boolean
+}
+
+export interface EaConfig {
+  enable_execution:    boolean
+  enable_paper:        boolean
+  max_open_positions:  number
+  max_trades_per_day:  number
+  trades_today:        number
+  trades_remaining:    number
+  daily_loss_pct:      number
+  min_confidence_pct:  number
+  risk_per_trade_pct:  number
+  enable_break_even:   boolean
+  enable_trailing:     boolean
+  break_even_trigger_pips:  number
+  trailing_trigger_pips:    number
+  trailing_distance_pips:   number
+}
+
+export async function getEaHeartbeat(): Promise<EaHeartbeat | null> {
+  const rows = await supabaseGet<Array<Record<string, unknown>>>(
+    'rcs_ea_heartbeat?select=ea_instance_id,account_login,ts,account_balance,account_equity,open_positions,is_paused&order=ts.desc&limit=1',
+    { revalidate: 30 },
+  )
+  if (!rows || rows.length === 0) return null
+  const r = rows[0]
+  return {
+    ea_instance_id: String(r.ea_instance_id ?? ''),
+    account_login:  r.account_login != null ? Number(r.account_login) : null,
+    ts:             String(r.ts ?? ''),
+    account_balance: r.account_balance != null ? Number(r.account_balance) : null,
+    account_equity:  r.account_equity != null ? Number(r.account_equity) : null,
+    open_positions:  r.open_positions != null ? Number(r.open_positions) : null,
+    is_paused:      Boolean(r.is_paused),
+  }
+}
+
+export async function getEaConfig(): Promise<EaConfig | null> {
+  // Read directly from app_settings (same source as /api/ea/config exposes to EA)
+  const rows = await supabaseGet<Array<Record<string, unknown>>>(
+    'app_settings?user_id=eq.default&select=ea_enable_execution,ea_enable_paper,ea_max_open_positions,ea_max_trades_per_day,ea_risk_per_trade_pct,ea_min_confidence_pct,ea_daily_loss_pct,ea_enable_break_even,ea_break_even_trigger_pips,ea_enable_trailing,ea_trailing_trigger_pips,ea_trailing_distance_pips&limit=1',
+    { revalidate: 60 },
+  )
+  if (!rows || rows.length === 0) return null
+  const r = rows[0]
+  return {
+    enable_execution:   Boolean(r.ea_enable_execution),
+    enable_paper:       Boolean(r.ea_enable_paper),
+    max_open_positions: Number(r.ea_max_open_positions ?? 1),
+    max_trades_per_day: Number(r.ea_max_trades_per_day ?? 5),
+    trades_today:       0,  // not in app_settings; fetch via /api/ea/config if needed
+    trades_remaining:   0,
+    daily_loss_pct:     Number(r.ea_daily_loss_pct ?? 5),
+    min_confidence_pct: Number(r.ea_min_confidence_pct ?? 65),
+    risk_per_trade_pct: Number(r.ea_risk_per_trade_pct ?? 1),
+    enable_break_even:  Boolean(r.ea_enable_break_even),
+    enable_trailing:    Boolean(r.ea_enable_trailing),
+    break_even_trigger_pips: Number(r.ea_break_even_trigger_pips ?? 50),
+    trailing_trigger_pips:   Number(r.ea_trailing_trigger_pips ?? 100),
+    trailing_distance_pips:  Number(r.ea_trailing_distance_pips ?? 30),
+  }
+}
+
 // ── Mapper (mirror of client-side, but pure function) ───────────────────────────
 
 function mapBundleRowToSignalBundle(row: Record<string, unknown>): SignalBundle {

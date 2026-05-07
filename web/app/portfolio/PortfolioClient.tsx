@@ -5,9 +5,11 @@ import Link from 'next/link'
 import {
   ArrowLeft, Briefcase, Activity, Target, Zap, Waves,
   CheckCircle2, Hourglass, type LucideIcon, Clock, RotateCcw, Loader2, X,
+  Cpu, Wallet, Power, PowerOff, AlertTriangle,
 } from 'lucide-react'
 import {
   type ActiveTrade, type PortfolioStats, type TradeStatus,
+  type EaHeartbeat, type EaConfig,
 } from '@/lib/server-api'
 import { fmtPrice, cn } from '@/lib/utils'
 
@@ -33,6 +35,8 @@ interface Props {
   closedTrades: ActiveTrade[]
   stats:        PortfolioStats | null
   xauPrice:     number | null   // current spot for live trades chart
+  eaHeartbeat?: EaHeartbeat | null
+  eaConfig?:    EaConfig | null
 }
 
 // Default risk per trade when trade.risk_pct is null (legacy pre-migration 004
@@ -80,7 +84,7 @@ const STATUS_TONE: Record<TradeStatus, 'open' | 'win' | 'loss' | 'neutral'> = {
   SL: 'loss', EXPIRED: 'neutral', MANUAL: 'neutral',
 }
 
-export default function PortfolioClient({ openTrades, closedTrades, stats, xauPrice }: Props) {
+export default function PortfolioClient({ openTrades, closedTrades, stats, xauPrice, eaHeartbeat = null, eaConfig = null }: Props) {
   const [filter, setFilter] = useState<StyleFilter>('all')
   const [range,  setRange]  = useState<RangeFilter>('recent')
   // Optimistic close: trade IDs the user just closed locally. Hide immediately
@@ -187,6 +191,9 @@ export default function PortfolioClient({ openTrades, closedTrades, stats, xauPr
       </header>
 
       <div className="space-y-5">
+        {/* EA / MT5 Demo Account status — shows real broker info so user can sync */}
+        <EaStatusCard heartbeat={eaHeartbeat} config={eaConfig} xauPrice={xauPrice} />
+
         {pctStats.n_closed > 0 ? (
           <StatsCard pctStats={pctStats} openCount={stats?.open_count ?? openTrades.length} expired={stats?.expired ?? 0} />
         ) : <EmptyStats />}
@@ -281,6 +288,143 @@ export default function PortfolioClient({ openTrades, closedTrades, stats, xauPr
 }
 
 // Per-style breakdown table (pct portfolio)
+// EA / MT5 demo account status — shows balance, equity, lot sizing, leverage,
+// execution mode (live vs paper), kill-switch state. Lets user verify config
+// matches Exness demo setup ("akun demo gua samain"). User explicit 2026-05-07:
+// pakai leverage Unlimited di Exness demo, modal $1000.
+function EaStatusCard({
+  heartbeat, config, xauPrice,
+}: {
+  heartbeat: EaHeartbeat | null
+  config:    EaConfig | null
+  xauPrice:  number | null
+}) {
+  // Estimate lot size from current balance + risk % + typical SL distance
+  // (~0.5% of price for XAU). User wants "lot per trade" visible.
+  const balance = heartbeat?.account_balance ?? null
+  const riskPct = config?.risk_per_trade_pct ?? 1
+  const slDistanceUSD = xauPrice ? xauPrice * 0.005 : 25  // ~0.5% typical scalper
+  const riskUSD = balance != null ? balance * riskPct / 100 : null
+  // XAUUSD: 1 lot = 100oz, 1 pip ($0.01 move) = $1 per 0.01 lot
+  // lot = riskUSD / (slDistanceUSD * 100)  (since 1 lot moves $100 per $1)
+  const lotEstimate = (riskUSD != null) ? riskUSD / (slDistanceUSD * 100) : null
+
+  const heartbeatAge = heartbeat?.ts ? Math.floor((Date.now() - new Date(heartbeat.ts).getTime()) / 1000) : null
+  const heartbeatStale = heartbeatAge == null || heartbeatAge > 300  // >5min = stale
+  const eaOnline = !!heartbeat && !heartbeatStale && !heartbeat.is_paused
+
+  const liveMode = !!config?.enable_execution && !config.enable_paper
+  const modeLabel = !config ? '?' : (config.enable_execution
+    ? (config.enable_paper ? 'PAPER' : 'LIVE')
+    : 'OFF')
+  const modeTone = !config ? 'slate' : (liveMode ? 'emerald' : (config.enable_execution ? 'amber' : 'slate'))
+
+  return (
+    <div>
+      <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-widest mb-1.5 px-2 flex items-center gap-2">
+        <Cpu size={11} /> EA / MT5 Demo
+      </p>
+      <div className="bg-gradient-to-br from-slate-800/60 to-slate-900/60 rounded-2xl border border-slate-800 overflow-hidden">
+        {/* Top row: status + mode badge */}
+        <div className="px-3.5 py-2.5 border-b border-slate-800/80 flex items-center gap-3">
+          <div className={cn(
+            'w-7 h-7 rounded-lg flex items-center justify-center shrink-0',
+            eaOnline ? 'bg-emerald-700/30 border border-emerald-600/40' : 'bg-slate-900/60 border border-slate-700/50',
+          )}>
+            {eaOnline ? <Power size={13} className="text-emerald-300" /> : <PowerOff size={13} className="text-slate-500" />}
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <p className="text-sm font-bold text-slate-100">
+                {heartbeat?.ea_instance_id || 'EA tidak terhubung'}
+              </p>
+              <span className={cn(
+                'text-[9px] uppercase tracking-wide font-bold px-1.5 py-0.5 rounded border leading-none',
+                modeTone === 'emerald' ? 'bg-emerald-700/30 text-emerald-200 border-emerald-700/40' :
+                modeTone === 'amber'   ? 'bg-amber-700/30 text-amber-200 border-amber-700/40' :
+                                          'bg-slate-700/30 text-slate-300 border-slate-700/40',
+              )}>
+                {modeLabel}
+              </span>
+              {heartbeat?.is_paused && (
+                <span className="text-[9px] uppercase tracking-wide font-bold px-1.5 py-0.5 rounded border leading-none bg-amber-700/30 text-amber-200 border-amber-700/40 flex items-center gap-1">
+                  <AlertTriangle size={9} /> PAUSED
+                </span>
+              )}
+            </div>
+            <p className="text-[10px] text-slate-500 mt-0.5">
+              {heartbeat
+                ? <>Account #{heartbeat.account_login} · heartbeat {heartbeatAge != null ? `${heartbeatAge}s lalu` : '—'}</>
+                : 'Belum ada heartbeat — pastikan EA terpasang di MT5'}
+            </p>
+          </div>
+        </div>
+
+        {/* Account: balance + equity + open positions */}
+        <div className="grid grid-cols-3 divide-x divide-slate-800/80">
+          <Cell
+            label="Balance"
+            value={balance != null ? fmtUSD(balance) : '—'}
+            tone="neutral"
+          />
+          <Cell
+            label="Equity"
+            value={heartbeat?.account_equity != null ? fmtUSD(heartbeat.account_equity) : '—'}
+            tone={heartbeat?.account_equity != null && balance != null && heartbeat.account_equity < balance ? 'bad' : 'neutral'}
+          />
+          <Cell
+            label="Open"
+            value={`${heartbeat?.open_positions ?? 0} / ${config?.max_open_positions ?? 1}`}
+            tone="neutral"
+          />
+        </div>
+
+        {/* Risk & sizing */}
+        <div className="px-3.5 py-2.5 border-t border-slate-800/80 space-y-1.5 text-[11px]">
+          <div className="flex items-center justify-between">
+            <span className="text-slate-500 flex items-center gap-1.5"><Wallet size={10}/> Risk per trade</span>
+            <span className="font-mono text-slate-200">
+              {riskPct}% {riskUSD != null && <span className="text-slate-500">(~{fmtUSD(riskUSD)})</span>}
+            </span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-slate-500">Estimasi lot/trade</span>
+            <span className="font-mono text-slate-200">
+              {lotEstimate != null ? lotEstimate.toFixed(2) : '—'} lot
+              <span className="text-slate-500 ml-1">(SL ~${slDistanceUSD.toFixed(0)})</span>
+            </span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-slate-500">Leverage</span>
+            <span className="font-mono text-slate-200">1 : Unlimited <span className="text-slate-500">(Exness demo)</span></span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-slate-500">Daily loss kill-switch</span>
+            <span className="font-mono text-slate-200">{config?.daily_loss_pct ?? 5}%</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-slate-500">Min confidence promote</span>
+            <span className="font-mono text-slate-200">{config?.min_confidence_pct ?? 65}%</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-slate-500">Max trades / hari</span>
+            <span className="font-mono text-slate-200">{config?.max_trades_per_day ?? 5}</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-slate-500">Trailing / break-even</span>
+            <span className="font-mono text-slate-200">
+              {config?.enable_trailing ? `${config.trailing_trigger_pips}/${config.trailing_distance_pips}p` : 'OFF'}
+              {' · '}
+              {config?.enable_break_even ? `${config.break_even_trigger_pips}p` : 'OFF'}
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+
 function BreakdownCard({ breakdown }: { breakdown: Record<string, { wins: number; losses: number; total_pct: number; n: number; avg_duration_ms: number }> }) {
   return (
     <div>
