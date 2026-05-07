@@ -6,30 +6,36 @@
     "dev": "next dev --turbopack",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "pages:build": "npx @cloudflare/next-on-pages",
+    "pages:preview": "wrangler pages dev .vercel/output/static",
+    "pages:deploy": "wrangler pages deploy .vercel/output/static --project-name=yeehee"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.50.0",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "lightweight-charts": "^4.2.2",
+    "lucide-react": "^0.503.0",
     "next": "14.2.29",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "@supabase/supabase-js": "^2.50.0",
-    "swr": "^2.3.3",
-    "lucide-react": "^0.503.0",
-    "lightweight-charts": "^4.2.2",
     "recharts": "^2.15.3",
-    "clsx": "^2.1.1",
-    "tailwind-merge": "^2.6.0",
-    "class-variance-authority": "^0.7.1"
+    "swr": "^2.3.3",
+    "tailwind-merge": "^2.6.0"
   },
   "devDependencies": {
-    "typescript": "^5.8.3",
+    "@cloudflare/next-on-pages": "^1.12.0",
+    "@cloudflare/workers-types": "^4.20260507.1",
+    "@types/node": "^22.15.3",
     "@types/react": "^18.3.21",
     "@types/react-dom": "^18.3.7",
-    "@types/node": "^22.15.3",
-    "tailwindcss": "^3.4.17",
-    "postcss": "^8.5.3",
     "autoprefixer": "^10.4.21",
     "eslint": "^8",
-    "eslint-config-next": "14.2.29"
+    "eslint-config-next": "14.2.29",
+    "postcss": "^8.5.3",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.8.3",
+    "wrangler": "^3.114.17"
   }
 }
