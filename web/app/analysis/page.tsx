@@ -2,6 +2,8 @@
 import AnalysisClient from './AnalysisClient'
 import { getLatestSignalBundle } from '@/lib/server-api'
 
+export const runtime = 'edge'
+
 export const revalidate = 60
 
 export default async function AnalysisPage() {

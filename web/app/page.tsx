@@ -6,6 +6,8 @@ import {
   getRealEaTrades,
 } from '@/lib/server-api'
 
+export const runtime = 'edge'
+
 // 2026-05-07: bumped 60s -> 180s. Vercel free tier cap exceeded.
 export const revalidate = 180
 

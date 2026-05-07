@@ -4,6 +4,8 @@ import Link from 'next/link'
 import { ArrowLeft, Activity, AlertTriangle, Cpu, Clock } from 'lucide-react'
 import { supabaseGet } from '@/lib/server-api'
 
+export const runtime = 'edge'
+
 export const dynamic = 'force-dynamic'
 export const revalidate = 30
 

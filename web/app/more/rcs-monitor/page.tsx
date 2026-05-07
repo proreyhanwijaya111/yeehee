@@ -3,6 +3,8 @@ import Link from 'next/link'
 import { ArrowLeft, Sparkles, TrendingUp, TrendingDown, Pause, AlertCircle, Activity } from 'lucide-react'
 import { getRcsHistory, type RCSSignalRow, supabaseGet } from '@/lib/server-api'
 
+export const runtime = 'edge'
+
 export const revalidate = 30
 
 interface RcsModelRow {

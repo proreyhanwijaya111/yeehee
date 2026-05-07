@@ -6,6 +6,8 @@ import {
 } from 'lucide-react'
 import UserHeader from '@/components/UserHeader'
 
+export const runtime = 'edge'
+
 type Item = {
   href: string
   icon: LucideIcon
