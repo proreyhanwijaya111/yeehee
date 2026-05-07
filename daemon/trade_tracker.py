@@ -46,7 +46,10 @@ EXPIRY_HOURS = {
 
 
 # Minimum confidence to open a trade. Below this = "weak signal", skip.
-MIN_CONFIDENCE = 0.50
+# Default fallback only — actual value read from app_settings.ea_min_confidence_pct
+# at runtime to keep paper sim and broker EA in lockstep (user spec 2026-05-07:
+# "logic dalemnya sama antara paper dan broker").
+MIN_CONFIDENCE = 0.65
 
 # IMPROVEMENT #4: Kelly sizing constants.
 # Need at least N closed trades for this style before Kelly is statistically meaningful.
@@ -220,9 +223,25 @@ def open_trade_if_eligible(
     if side not in ("LONG", "SHORT"):
         return None
 
+    # Threshold from app_settings (mirror EA gating). 2026-05-07: user spec
+    # "logic dalemnya sama antara paper dan broker". Read same source EA uses.
+    min_conf = MIN_CONFIDENCE
+    try:
+        if getattr(store, "has_db", False):
+            r = (
+                store._client.from_("app_settings")
+                .select("ea_min_confidence_pct")
+                .eq("user_id", "default")
+                .limit(1)
+                .execute()
+            )
+            if r.data and r.data[0].get("ea_min_confidence_pct"):
+                min_conf = float(r.data[0]["ea_min_confidence_pct"]) / 100.0
+    except Exception:
+        pass  # use fallback constant
     confidence = float(signal.get("confidence") or 0)
-    if confidence < MIN_CONFIDENCE:
-        log(f"[tracker] skip {style}: confidence {confidence:.2f} < {MIN_CONFIDENCE}")
+    if confidence < min_conf:
+        log(f"[tracker] skip {style}: confidence {confidence:.2f} < {min_conf:.2f} (app_settings)")
         return None
 
     entry = float(signal.get("entry") or 0)

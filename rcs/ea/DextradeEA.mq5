@@ -104,6 +104,35 @@ int      g_config_poll_interval  = 60;   // refresh API config every 60s
 ulong   g_sl_modified_keys[];
 int     g_sl_modified_vals[];
 
+// Track original SL distance per ticket — needed for relative-R BEP/trail.
+// v0.3.2: BEP triggers at +1R (i.e. profit_pips ≥ original_sl_distance) instead
+// of fixed pips config. Trade with SL=$5 has BEP fire at +$5 profit; SL=$10 at
+// +$10. Symmetric to risk taken. Original SL must be cached BEFORE BEP modifies
+// POSITION_SL (otherwise lookup returns the moved SL and 1R becomes meaningless).
+ulong   g_orig_sl_dist_keys[];
+double  g_orig_sl_dist_vals[];
+
+void StoreOrigSlDist(ulong ticket, double dist)
+{
+    int n = ArraySize(g_orig_sl_dist_keys);
+    for(int i = 0; i < n; i++)
+    {
+        if(g_orig_sl_dist_keys[i] == ticket) { g_orig_sl_dist_vals[i] = dist; return; }
+    }
+    ArrayResize(g_orig_sl_dist_keys, n + 1);
+    ArrayResize(g_orig_sl_dist_vals, n + 1);
+    g_orig_sl_dist_keys[n] = ticket;
+    g_orig_sl_dist_vals[n] = dist;
+}
+
+double GetOrigSlDist(ulong ticket)
+{
+    int n = ArraySize(g_orig_sl_dist_keys);
+    for(int i = 0; i < n; i++)
+        if(g_orig_sl_dist_keys[i] == ticket) return g_orig_sl_dist_vals[i];
+    return 0;
+}
+
 void SetSlModifiedFlag(ulong ticket, int flag)
 {
     int n = ArraySize(g_sl_modified_keys);
@@ -135,7 +164,7 @@ int GetSlModifiedFlag(ulong ticket)
 // ============================================================================
 int OnInit()
 {
-    Print("[DextradeEA] v0.3.1 init (R:R preserve on slippage + heartbeat retry + close-report retry)");
+    Print("[DextradeEA] v0.3.2 init (R:R preserve + BEP at +1R relative + heartbeat retry + close-report retry)");
     SetSafeDefaults();
     PollConfig();   // initial fetch
 
@@ -445,6 +474,12 @@ void OnTimer()
     PrintFormat("[DextradeEA] LIVE OPEN ticket=%I64u fill=%.2f signal_entry=%.2f slip=%dpts %s signal=%I64d",
                 ticket, fill, entry, slippage,
                 rr_adjusted ? "RR-ADJUSTED" : "RR-INTACT", signal_id);
+
+    // Cache original SL distance for relative-R BEP/trail logic.
+    // After R:R adjust above, sl is the FILL-aligned SL. Store its distance.
+    double orig_sl_dist = MathAbs(fill - sl);
+    StoreOrigSlDist(ticket, orig_sl_dist);
+
     ReportLiveOpened(signal_id, ticket, fill, lot, sl, tp1, slippage);
 }
 
@@ -484,13 +519,20 @@ void ManageOpenPositions()
         double new_sl = current_sl;
         bool   bep_armed = false;
 
-        // 1. Break-even — move SL to entry + lock_pips when profit >= trigger
-        if(g_config.enable_break_even && profit_pips >= g_config.break_even_trigger_pips)
+        // 1. Break-even — fire at +1R (relative to original SL distance).
+        // v0.3.2 (2026-05-07): switched from fixed config pips to per-trade
+        // 1R-relative trigger. Symmetric to risk taken: $5 SL → BEP at +$5;
+        // $20 SL → BEP at +$20. Aligns with user's 3R target (BEP locks
+        // breakeven once first 1/3 of TP distance covered).
+        double orig_sl_dist = GetOrigSlDist(ticket);
+        double profit_dollar = (type == POSITION_TYPE_BUY) ? (price_now - entry) : (entry - price_now);
+        if(g_config.enable_break_even && orig_sl_dist > 0 && profit_dollar >= orig_sl_dist)
         {
+            // 1R reached. Move SL to entry + small lock (config break_even_lock_pips
+            // still respected for buffer above true entry).
             double bep_sl = (type == POSITION_TYPE_BUY)
                             ? entry + g_config.break_even_lock_pips * pip_size
                             : entry - g_config.break_even_lock_pips * pip_size;
-            // Only move SL forward (never backward — never increase risk)
             if(type == POSITION_TYPE_BUY  && bep_sl > current_sl) { new_sl = bep_sl; bep_armed = true; }
             if(type == POSITION_TYPE_SELL && (current_sl == 0 || bep_sl < current_sl)) { new_sl = bep_sl; bep_armed = true; }
         }

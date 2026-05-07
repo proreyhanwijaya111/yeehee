@@ -75,10 +75,12 @@ class ScalperConfig:
     timeframe: str = "5m"
     htf_filter: str = "1h"
     atr_period: int = 14
+    # 2026-05-07 RR-3:1 spec: TP1 = 3 × SL distance. Scalper SL=1.2×ATR, so
+    # TP1=3.6×ATR. EA's BEP-at-1R lock breakeven once first ATR-distance covered.
     sl_atr_mult: float = 1.2
-    tp1_atr_mult: float = 1.0
-    tp2_atr_mult: float = 2.0
-    tp3_atr_mult: float = 3.5
+    tp1_atr_mult: float = 3.6
+    tp2_atr_mult: float = 4.8   # buffered above TP1 for partial-close future use
+    tp3_atr_mult: float = 6.0
 
 @dataclass(frozen=True)
 class IntradayConfig:
@@ -86,9 +88,9 @@ class IntradayConfig:
     htf_filter: str = "4h"
     atr_period: int = 14
     sl_atr_mult: float = 1.5
-    tp1_atr_mult: float = 1.5
-    tp2_atr_mult: float = 3.0
-    tp3_atr_mult: float = 5.0
+    tp1_atr_mult: float = 4.5   # = 3 × sl_atr_mult (RR 3:1)
+    tp2_atr_mult: float = 6.0
+    tp3_atr_mult: float = 7.5
 
 @dataclass(frozen=True)
 class SwingConfig:
@@ -96,9 +98,9 @@ class SwingConfig:
     htf_filter: str = "1d"
     atr_period: int = 14
     sl_atr_mult: float = 2.0
-    tp1_atr_mult: float = 2.0
-    tp2_atr_mult: float = 4.0
-    tp3_atr_mult: float = 7.0
+    tp1_atr_mult: float = 6.0   # = 3 × sl_atr_mult (RR 3:1)
+    tp2_atr_mult: float = 8.0
+    tp3_atr_mult: float = 10.0
 
 SCALPER = ScalperConfig()
 INTRADAY = IntradayConfig()
