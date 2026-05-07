@@ -310,7 +310,9 @@ function EaStatusCard({
   const lotEstimate = (riskUSD != null) ? riskUSD / (slDistanceUSD * 100) : null
 
   const heartbeatAge = heartbeat?.ts ? Math.floor((Date.now() - new Date(heartbeat.ts).getTime()) / 1000) : null
-  const heartbeatStale = heartbeatAge == null || heartbeatAge > 300  // >5min = stale
+  // Tightened from 300s -> 120s per user audit 2026-05-07: 5min too lenient,
+  // 2min matches EA heartbeat cadence (every 60s) + 1 grace cycle.
+  const heartbeatStale = heartbeatAge == null || heartbeatAge > 120
   const eaOnline = !!heartbeat && !heartbeatStale && !heartbeat.is_paused
 
   const liveMode = !!config?.enable_execution && !config.enable_paper
@@ -319,11 +321,36 @@ function EaStatusCard({
     : 'OFF')
   const modeTone = !config ? 'slate' : (liveMode ? 'emerald' : (config.enable_execution ? 'amber' : 'slate'))
 
+  // RED ALARM: execution enabled tapi EA offline / no heartbeat. User audit
+  // 2026-05-07 -- panel sebelumnya silent abu-abu, gampang ke-skip. Sekarang
+  // visual loud kalau "go-live" config tapi EA gak responsive -- sinyal
+  // gak akan ke-execute sampai EA online lagi.
+  const showRedAlarm = !!config?.enable_execution && !eaOnline
+
   return (
     <div>
       <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-widest mb-1.5 px-2 flex items-center gap-2">
         <Cpu size={11} /> EA / MT5 Demo
       </p>
+      {showRedAlarm && (
+        <div className="mb-2 bg-rose-900/30 border-2 border-rose-600/60 rounded-xl px-3 py-2.5 flex items-start gap-2 animate-pulse">
+          <AlertTriangle size={16} className="text-rose-300 shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <p className="text-xs font-bold text-rose-100 leading-tight">
+              ⚠️ EA OFFLINE — sinyal TIDAK dieksekusi
+            </p>
+            <p className="text-[11px] text-rose-200/80 mt-0.5 leading-snug">
+              {heartbeat == null
+                ? 'Tidak ada heartbeat: EA belum attached ke MT5 chart, atau MT5/FastAPI mati.'
+                : heartbeat.is_paused
+                ? 'EA dalam mode PAUSED (kemungkinan kena daily loss kill switch).'
+                : `Heartbeat stale ${heartbeatAge}s lalu (max 120s). MT5 mungkin disconnect dari broker.`}
+              <br/>Cek: MT5 chart smiley face ada? FastAPI :8001 alive? Jalanin
+              <span className="font-mono"> python scripts/attach_ea_mt5.py</span> di PC rumah.
+            </p>
+          </div>
+        </div>
+      )}
       <div className="bg-gradient-to-br from-slate-800/60 to-slate-900/60 rounded-2xl border border-slate-800 overflow-hidden">
         {/* Top row: status + mode badge */}
         <div className="px-3.5 py-2.5 border-b border-slate-800/80 flex items-center gap-3">

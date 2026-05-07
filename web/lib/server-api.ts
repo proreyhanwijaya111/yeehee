@@ -20,7 +20,17 @@ import type {
 } from './types'
 
 const URL = process.env.NEXT_PUBLIC_SUPABASE_URL || ''
-const KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
+const ANON_KEY    = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
+// Server-side fetch can safely use SERVICE_ROLE key (this file is `import 'server-only'`).
+// SERVICE_ROLE bypasses RLS — required for tables like rcs_ea_heartbeat,
+// rcs_signals, rcs_executions where RLS exists tapi tidak ada anon SELECT
+// policy. Without service key, /portfolio panel "EA tidak terhubung"
+// despite EA actually heartbeating (root cause user audit 2026-05-07 10:30 WIB).
+// Falls back to ANON_KEY if SERVICE_ROLE not configured (dev mode).
+const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
+                 || process.env.SUPABASE_SERVICE_KEY
+                 || ''
+const KEY = SERVICE_KEY || ANON_KEY
 
 // Cache TTL — 60s match daemon refresh cadence (default 5min)
 // pakai 60s biar UI punya freshness window kalau user reload cepat

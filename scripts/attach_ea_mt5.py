@@ -9,20 +9,28 @@ USAGE:
     # Optional flag --dry-run to inspect without clicking
 
 EXIT CODES:
-    0  success (EA attached, dialog confirmed)
+    0  success (EA attached, dialog confirmed, HEARTBEAT VERIFIED in Supabase)
     1  generic failure
     2  MT5 not running
     3  Navigator/TreeView not found
     4  EA not found in Navigator
     5  attach action failed
     6  dialog confirm failed
+    7  heartbeat VERIFICATION TIMEOUT (90s elapsed, no fresh row in
+       rcs_ea_heartbeat) -- attach probably failed silently (URL not
+       whitelisted, EA throwing internal error, FastAPI not reachable)
 
-VERIFY: poll Supabase rcs_ea_heartbeat after run -- expect entry within 60s.
+User audit 2026-05-07 10:30: previously script returned 0 just on "OK
+clicked" -- false-positive when EA attaches but can't WebRequest. NOW
+script polls Supabase to confirm EA actually heartbeating before claiming
+success.
 """
 from __future__ import annotations
+import os
 import sys
 import time
 import argparse
+from pathlib import Path
 
 try:
     from pywinauto import Application, Desktop, mouse
@@ -231,12 +239,97 @@ def attach_ea(dry_run: bool = False) -> int:
         except Exception:
             pass
 
-    print("[attach_ea] DONE -- verify via Supabase rcs_ea_heartbeat in next 60s")
-    return 0
+    print("[attach_ea] click sequence done -- now polling Supabase rcs_ea_heartbeat for proof...")
+    return _poll_heartbeat_proof()
+
+
+def _read_env(key: str) -> str | None:
+    """Read value from .env file at repo root."""
+    repo = Path(__file__).resolve().parent.parent
+    env_path = repo / ".env"
+    if not env_path.exists():
+        return None
+    for line in env_path.read_text(encoding="utf-8-sig").splitlines():
+        line = line.strip()
+        if line.startswith(f"{key}=") and "=" in line:
+            return line.split("=", 1)[1].strip()
+    return None
+
+
+def _poll_heartbeat_proof(max_wait_s: int = 90, poll_interval_s: int = 5) -> int:
+    """Poll Supabase rcs_ea_heartbeat untuk verify EA actually heartbeating.
+
+    Returns 0 only when fresh row (ts within last `max_wait_s`) appears
+    AFTER script start. Returns 7 on timeout. This eliminates false-positive
+    "attach success" when click sequence ran but WebRequest blocked / EA
+    runtime error preventing actual /api/ea/heartbeat POST.
+    """
+    try:
+        import requests
+    except ImportError:
+        print("[attach_ea] requests not installed; skipping heartbeat verify")
+        return 0
+
+    url     = _read_env("SUPABASE_URL")
+    api_key = _read_env("SUPABASE_SERVICE_KEY") or _read_env("SUPABASE_ANON_KEY")
+    if not url or not api_key:
+        print("[attach_ea] no SUPABASE_URL/key in .env; cannot verify heartbeat")
+        return 7
+
+    started_unix = time.time()
+    cutoff_iso = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(started_unix - 30))
+    print(f"[attach_ea] looking for heartbeat ts >= {cutoff_iso}Z")
+
+    deadline = started_unix + max_wait_s
+    last_seen = None
+    while time.time() < deadline:
+        try:
+            r = requests.get(
+                f"{url.rstrip('/')}/rest/v1/rcs_ea_heartbeat",
+                params={
+                    "select": "ts,is_paused,account_balance,open_positions",
+                    "order":  "ts.desc",
+                    "limit":  "1",
+                    "ts":     f"gte.{cutoff_iso}",
+                },
+                headers={
+                    "apikey":        api_key,
+                    "Authorization": f"Bearer {api_key}",
+                },
+                timeout=10,
+            )
+            if r.status_code == 200:
+                rows = r.json() or []
+                if rows:
+                    row = rows[0]
+                    age = time.time() - started_unix
+                    print(f"[attach_ea] HEARTBEAT VERIFIED after {age:.1f}s: ts={row.get('ts')} balance=${row.get('account_balance')} open={row.get('open_positions')} paused={row.get('is_paused')}")
+                    return 0
+                last_seen = "(no row yet)"
+            else:
+                last_seen = f"HTTP {r.status_code}"
+        except Exception as e:
+            last_seen = f"err {type(e).__name__}"
+        elapsed = int(time.time() - started_unix)
+        print(f"[attach_ea] poll +{elapsed}s: {last_seen} -- waiting (max {max_wait_s}s)")
+        time.sleep(poll_interval_s)
+
+    print(f"[attach_ea] TIMEOUT after {max_wait_s}s -- no heartbeat row appeared.")
+    print("[attach_ea] FAILURE MODES to check:")
+    print("  - MT5 'Allow WebRequest for listed URL' missing http://localtest.me:8001 + http://localhost:8001")
+    print("  - FastAPI :8001 not reachable from EA (curl http://localhost:8001/healthz)")
+    print("  - EA threw internal error -- check $APPDATA\\MetaQuotes\\Terminal\\*\\MQL5\\Logs\\<today>.log")
+    print("  - Algo Trading toolbar button not green / DextradeEA not actually attached to chart")
+    return 7
 
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--wait-seconds", type=int, default=0,
+                   help="Sleep N seconds before action (used by Task Scheduler at-logon to let MT5 fully start before attempting attach).")
     args = p.parse_args()
+    if args.wait_seconds > 0:
+        print(f"[attach_ea] sleeping {args.wait_seconds}s (--wait-seconds)")
+        time.sleep(args.wait_seconds)
     sys.exit(attach_ea(dry_run=args.dry_run))
