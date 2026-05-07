@@ -385,6 +385,15 @@ def update_open_trades(store, df_5m: pd.DataFrame, log=print) -> int:
     modified = 0
 
     for trade in open_trades:
+        # 2026-05-07: skip broker-mirror rows. Their lifecycle is driven by
+        # /api/ea/report mirror callbacks, not by candle-bar evaluation here.
+        # Without this skip, daemon would close paper rows from yfinance bars
+        # while broker still holds OPEN → desync between paper UI and reality.
+        # Marker = "broker_mirror" tag in reasons array (added by
+        # execution_api._mirror_to_active_trades on insert).
+        reasons = trade.get("reasons") or []
+        if "broker_mirror" in reasons:
+            continue
         try:
             update = _evaluate_trade(trade, df_5m, now)
             if update is None:

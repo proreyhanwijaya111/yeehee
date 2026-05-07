@@ -75,12 +75,13 @@ class ScalperConfig:
     timeframe: str = "5m"
     htf_filter: str = "1h"
     atr_period: int = 14
-    # 2026-05-07 RR-3:1 spec: TP1 = 3 × SL distance. Scalper SL=1.2×ATR, so
-    # TP1=3.6×ATR. EA's BEP-at-1R lock breakeven once first ATR-distance covered.
-    sl_atr_mult: float = 1.2
-    tp1_atr_mult: float = 3.6
-    tp2_atr_mult: float = 4.8   # buffered above TP1 for partial-close future use
-    tp3_atr_mult: float = 6.0
+    # 2026-05-07 user spec: scalper "R:R 1.5:0.5" — TIGHT SL 0.5×ATR + TP 1.5×ATR
+    # = ratio 3:1 but quick-action footprint suitable for true scalping.
+    # Combined with BEP-at-0.5R (= 0.25×ATR) protects fast.
+    sl_atr_mult: float = 0.5
+    tp1_atr_mult: float = 1.5
+    tp2_atr_mult: float = 2.5
+    tp3_atr_mult: float = 3.0
 
 @dataclass(frozen=True)
 class IntradayConfig:

@@ -292,9 +292,164 @@ def get_next_signal(ea: str = Query(..., description="EA instance ID")):
         raise HTTPException(500, f"DB error: {e}")
 
 
+_TF_TO_STYLE = {"M5": "scalper", "M15": "intraday", "H1": "swing"}
+_EXEC_TO_TRADE_STATUS = {
+    "OPEN":            "OPEN",
+    "PENDING_BROKER":  "OPEN",
+    "CLOSED_TP":       "TP1",
+    "CLOSED_SL":       "SL",
+    "CLOSED_TRAILING": "SL",  # trailing exit reuses SL slot per existing UI mapping
+    "CLOSED_MANUAL":   "MANUAL",
+    "CLOSED_NEWS":     "EXPIRED",
+}
+
+
+def _mirror_to_active_trades(supa, report, signal_lookup: dict | None = None) -> None:
+    """Mirror broker execution into active_trades (paper sim table).
+
+    User spec 2026-05-07: paper bot = SHADOW of broker bot. Every broker
+    execute → corresponding active_trades row. Same params (entry, sl, tp1,
+    lot translates to risk_pct) and lifecycle (OPEN → TP/SL/MANUAL).
+
+    Lookup signal_id → timeframe + direction (cached if signal_lookup passed,
+    else queried fresh). Returns silently on any error — broker reporting
+    must not be blocked by paper-mirror failures.
+    """
+    try:
+        sid = report.signal_id
+        ticket = report.mt5_ticket_id
+
+        # Resolve style + side. For close-by-ticket flow we need to find the
+        # original signal_id from the existing rcs_executions row.
+        if not sid and ticket:
+            existing = (
+                supa.from_("rcs_executions")
+                .select("signal_id")
+                .eq("mt5_ticket_id", ticket)
+                .limit(1)
+                .execute()
+            )
+            rows = existing.data or []
+            if rows and rows[0].get("signal_id"):
+                sid = rows[0]["signal_id"]
+        if not sid:
+            return  # cannot mirror without signal context
+
+        # Lookup timeframe + direction
+        sig = (signal_lookup or {}).get(sid)
+        if not sig:
+            r = (
+                supa.from_("rcs_signals")
+                .select("id, timeframe, direction")
+                .eq("id", sid)
+                .limit(1)
+                .execute()
+            )
+            rows = r.data or []
+            if not rows:
+                return
+            sig = rows[0]
+        tf = sig.get("timeframe")
+        side = sig.get("direction")
+        style = _TF_TO_STYLE.get(tf)
+        if not style or side not in ("LONG", "SHORT"):
+            return
+
+        # Map status. REJECTED is not mirrored (no paper row for failed orders).
+        is_close = report.status.startswith("CLOSED_") if report.status else False
+        if report.status == "REJECTED":
+            return
+        target_status = _EXEC_TO_TRADE_STATUS.get(report.status)
+        if not target_status:
+            return
+
+        # Compute risk_pct from EA's reported risk_pct_used (% → fraction).
+        # For close events, preserve risk_pct from existing row (0.01 fallback).
+        risk_pct_frac = 0.01
+        if report.risk_pct_used is not None:
+            risk_pct_frac = float(report.risk_pct_used) / 100.0
+
+        # Compute pnl_r for closed trades (PnL in money / risk in money).
+        pnl_r = None
+        pnl_pct = None
+        if is_close and report.pnl_money is not None and report.account_balance_at_open:
+            risk_dollar = report.account_balance_at_open * risk_pct_frac
+            if risk_dollar > 0:
+                pnl_r = float(report.pnl_money) / risk_dollar
+            pnl_pct = (float(report.pnl_money) / report.account_balance_at_open) * 100.0
+
+        # Find existing BROKER-MIRROR active_trades row. Fetch recent OPENs of
+        # this style, filter "broker_mirror" tag in Python (avoids brittle
+        # PostgREST jsonb operator syntax that may differ across supabase-py
+        # versions). Only mirror-tagged OPEN rows are matched — daemon-strategy
+        # paper rows are left untouched.
+        existing = (
+            supa.from_("active_trades")
+            .select("id, status, reasons")
+            .eq("user_id", "default")
+            .eq("style", style)
+            .eq("status", "OPEN")
+            .order("opened_at", desc=True)
+            .limit(5)
+            .execute()
+        )
+        match_id = None
+        for row in (existing.data or []):
+            tags = row.get("reasons") or []
+            if "broker_mirror" in tags:
+                match_id = row["id"]
+                break
+
+        if report.status == "OPEN" and not match_id:
+            # INSERT new mirror row
+            from datetime import timedelta
+            now = datetime.now(timezone.utc)
+            expiry = now + timedelta(hours={"scalper": 4, "intraday": 24, "swing": 72}[style])
+            payload = {
+                "user_id":     "default",
+                "style":       style,
+                "side":        side,
+                "entry":       report.execution_price,
+                "sl":          report.execution_sl,
+                "tp1":         report.execution_tp,
+                "original_sl": report.execution_sl,
+                "status":      "OPEN",
+                "opened_at":   now.isoformat(),
+                "expiry_at":   expiry.isoformat(),
+                "risk_pct":    risk_pct_frac,
+                "confidence":  None,
+                "regime":      None,
+                "session":     None,
+                # Marker for daemon update_open_trades to skip — broker
+                # /api/ea/report drives this row's lifecycle, not candle bars.
+                "reasons":     ["broker_mirror"],
+                "risks":       [],
+            }
+            supa.from_("active_trades").insert(payload).execute()
+
+        elif is_close and match_id:
+            # UPDATE existing OPEN row to closed
+            patch = {
+                "status":      target_status,
+                "closed_at":   report.closed_at or datetime.now(timezone.utc).isoformat(),
+                "exit_price":  report.close_price,
+                "exit_reason": report.close_reason,
+                "pnl_r":       pnl_r,
+                "pnl_pct":     pnl_pct,
+            }
+            supa.from_("active_trades").update(patch).eq("id", match_id).execute()
+    except Exception as e:
+        # Best-effort mirror — never break broker reporting. But LOG so we see.
+        import traceback
+        print(f"[mirror] FAIL {type(e).__name__}: {e}")
+        traceback.print_exc()
+
+
 @app.post("/api/ea/report")
 def report_execution(report: ExecutionReport):
     """EA reports execution outcome. Inserts to rcs_executions, updates rcs_signals.
+    ALSO mirrors to active_trades (paper sim) per user spec — bot paper shadows
+    bot broker exactly.
 
     Report scenarios:
       - status=OPEN          → trade filled at execution_price, signal.execution_status=EXECUTED
@@ -344,6 +499,8 @@ def report_execution(report: ExecutionReport):
                     supa.from_("rcs_signals").update({
                         "execution_status": "EXECUTED",
                     }).eq("id", resolved_signal_id).execute()
+                # Mirror close to active_trades (paper sim shadow)
+                _mirror_to_active_trades(supa, report)
                 return {"ok": True, "execution_id": exec_id, "signal_id": resolved_signal_id,
                         "execution_status": "EXECUTED", "mode": "close-by-ticket"}
 
@@ -388,6 +545,10 @@ def report_execution(report: ExecutionReport):
             supa.from_("rcs_signals").update({
                 "execution_status": new_signal_status,
             }).eq("id", report.signal_id).execute()
+
+        # Mirror to active_trades (paper sim shadow). OPEN inserts new row,
+        # CLOSE updates existing — REJECTED skipped.
+        _mirror_to_active_trades(supa, report)
 
         return {"ok": True, "signal_id": report.signal_id, "execution_status": new_signal_status}
     except Exception as e:

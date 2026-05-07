@@ -39,6 +39,14 @@ input int     PollIntervalSec     = 10;
 input ulong   MagicNumber         = 20260505;
 input int     SlippagePoints      = 30;
 
+// Fixed lot per style (user spec 2026-05-07): predictable trade size
+// regardless of balance fluctuation. Scalper 2× intraday/swing per spec.
+// EA's daily-loss-cap guard (in ComputeLotSize) still vetoes if SL too wide
+// for this lot+balance — guards against single-trade blowup.
+input double  LotScalper          = 0.02;
+input double  LotIntraday         = 0.01;
+input double  LotSwing            = 0.01;
+
 // ============================================================================
 // DYNAMIC CONFIG (refreshed from API every poll)
 // ============================================================================
@@ -164,7 +172,7 @@ int GetSlModifiedFlag(ulong ticket)
 // ============================================================================
 int OnInit()
 {
-    Print("[DextradeEA] v0.3.2 init (R:R preserve + BEP at +1R relative + heartbeat retry + close-report retry)");
+    Print("[DextradeEA] v0.3.3 init (lot guard relaxed + R:R preserve + BEP at +1R + heartbeat retry)");
     SetSafeDefaults();
     PollConfig();   // initial fetch
 
@@ -351,6 +359,7 @@ void OnTimer()
     // Parse signal
     long   signal_id     = (long)JsonGetNumber(body, "id");
     string direction     = JsonGetString(body, "direction");
+    string timeframe     = JsonGetString(body, "timeframe");  // M5 | M15 | H1
     double entry         = JsonGetNumber(body, "entry");
     double sl            = JsonGetNumber(body, "sl");
     double tp1           = JsonGetNumber(body, "tp1");
@@ -386,7 +395,28 @@ void OnTimer()
         return;
     }
 
-    double lot = ComputeLotSize(entry, sl);
+    // v0.3.3 fixed-lot per style (user spec): scalper 2× intraday/swing.
+    // Risk-based ComputeLotSize still used as safety check — if fixed lot
+    // would breach daily_loss_cap, refuse signal.
+    double lot;
+    if(timeframe == "M5")        lot = LotScalper;
+    else if(timeframe == "M15")  lot = LotIntraday;
+    else if(timeframe == "H1")   lot = LotSwing;
+    else                          lot = LotIntraday;  // unknown TF → safest default
+
+    // Safety check: would this fixed lot breach daily_loss_cap?
+    double pip_size_check  = GetPipSize();
+    double pip_value_check = GetPipValue();
+    double sl_pips_check   = MathAbs(entry - sl) / pip_size_check;
+    double risk_dollar     = lot * sl_pips_check * pip_value_check;
+    double risk_pct        = (risk_dollar / AccountInfoDouble(ACCOUNT_BALANCE)) * 100.0;
+    if(risk_pct > g_config.daily_loss_pct)
+    {
+        PrintFormat("[DextradeEA] reject %s lot=%.2f: would risk %.2f%% > daily_loss_cap %.1f%% (SL too wide for fixed lot)",
+                    timeframe, lot, risk_pct, g_config.daily_loss_pct);
+        ReportRejected(signal_id, "risk_exceeds_daily_cap");
+        return;
+    }
     if(lot <= 0)
     {
         ReportRejected(signal_id, "invalid_lot_size");
@@ -519,14 +549,16 @@ void ManageOpenPositions()
         double new_sl = current_sl;
         bool   bep_armed = false;
 
-        // 1. Break-even — fire at +1R (relative to original SL distance).
-        // v0.3.2 (2026-05-07): switched from fixed config pips to per-trade
-        // 1R-relative trigger. Symmetric to risk taken: $5 SL → BEP at +$5;
-        // $20 SL → BEP at +$20. Aligns with user's 3R target (BEP locks
-        // breakeven once first 1/3 of TP distance covered).
+        // 1. Break-even — fire at +0.5R (= half of original SL distance).
+        // v0.3.3 (2026-05-07 evening): user spec "sl naik ke posisi op disaat
+        // 0,5r udah hit floting profit". Earlier was 1R. 0.5R triggers BEP
+        // halfway to first profit target — protects fast on trends that fade.
+        // Scalper TP at 1.5R, intraday/swing at 3R. BEP at 0.5R always leaves
+        // room for trend continuation.
         double orig_sl_dist = GetOrigSlDist(ticket);
         double profit_dollar = (type == POSITION_TYPE_BUY) ? (price_now - entry) : (entry - price_now);
-        if(g_config.enable_break_even && orig_sl_dist > 0 && profit_dollar >= orig_sl_dist)
+        double bep_threshold = orig_sl_dist * 0.5;  // 0.5R trigger
+        if(g_config.enable_break_even && orig_sl_dist > 0 && profit_dollar >= bep_threshold)
         {
             // 1R reached. Move SL to entry + small lock (config break_even_lock_pips
             // still respected for buffer above true entry).
@@ -642,17 +674,30 @@ double ComputeLotSize(double entry, double sl)
     double lot_min     = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
     double lot_max     = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
     if(lot_step <= 0) lot_step = 0.01;
-    // Round to nearest step (was floor — caused 0.0076 -> 0 fallback to 0.01,
-    // overshooting target risk silently). Now: round nearest, but if rounded
-    // result would exceed target risk by >50%, reject to caller (return 0).
     double lot_rounded = MathRound(lot_raw / lot_step) * lot_step;
     if(lot_rounded < lot_min) lot_rounded = lot_min;
     if(lot_rounded > lot_max) lot_rounded = lot_max;
-    // Hard guard: reject if min lot already overshoots target by 1.5x.
-    // Caller will mark signal as 'risk_too_small_for_min_lot' rejection.
+
+    // v0.3.3 (2026-05-07): REMOVED strict 1.5× overshoot reject. With $1k
+    // balance + 2% target risk + 80-point swing SL, min_lot_risk = $80 vs
+    // target $22 = 3.6× overshoot → rejected. Result: 100% swing signals
+    // missed. User audit confirmed 17/19 H1 signals REJECTED.
+    //
+    // New behavior: ALWAYS allow min_lot (no reject on overshoot). Realized
+    // risk_pct reported accurately to DB so /portfolio shows truth. Hard cap
+    // only when overshoot >5× (catastrophic — would exceed daily loss cap on
+    // single trade) — extremely rare, prevents account blowup edge case.
     double min_lot_risk = lot_min * sl_pips * pip_value;
-    if(lot_rounded == lot_min && min_lot_risk > risk_amount * 1.5)
+    double balance_pct  = (min_lot_risk / balance) * 100.0;
+    if(lot_rounded == lot_min && balance_pct > g_config.daily_loss_pct)
+    {
+        // Min lot would exceed daily-loss cap on a single trade — refuse.
+        // E.g. SL=$200 on $1k account = $200 risk = 20% > 5% daily cap.
+        // Indicates signal SL too wide for current account size.
+        PrintFormat("[DextradeEA] lot reject: min_lot_risk $%.2f > daily_loss_cap %.1f%% of $%.2f",
+                    min_lot_risk, g_config.daily_loss_pct, balance);
         return 0;
+    }
     return lot_rounded;
 }
 

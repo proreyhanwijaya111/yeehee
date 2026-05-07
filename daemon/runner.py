@@ -522,21 +522,20 @@ def run_once(store: SettingsStore, settings: dict, log=print, trigger_reason: st
             except Exception as e:
                 log(f"[drift] check error: {e!r}")
 
-        try:
-            for style, sig_obj in (("scalper", sig_scalper), ("intraday", sig_intraday), ("swing", sig_swing)):
-                sig_dict = sig_obj.to_dict()
-                open_trade_if_eligible(
-                    store=store,
-                    style=style,
-                    signal=sig_dict,
-                    bundle_id=bundle_id,
-                    regime=regime_label,
-                    session=sess,
-                    log=log,
-                )
-        except Exception as e:
-            log(f"[tracker] open phase error: {e!r}")
-            traceback.print_exc()
+        # 2026-05-07 user spec: paper bot = SHADOW of broker bot. No more
+        # independent paper opens. active_trades rows now created by
+        # /api/ea/report mirror logic when broker EA executes a trade.
+        # Daemon's role: signal generation + EA promotion only. Paper trades
+        # appear in active_trades automatically when EA mirrors them.
+        #
+        # Old behavior (commented out): daemon called open_trade_if_eligible
+        # per style each cycle, opening paper trades independent of broker EA.
+        # Removed because paper-vs-broker winrate diverged (paper too ideal).
+        #
+        # NOTE: update_open_trades still runs above (line 446) to manage paper
+        # trades' SL/TP/expiry from price bars. Mirror rows have broker_mirror=True
+        # marker; update logic should skip those (daemon trade_tracker patched).
+        pass  # paper-shadow: do nothing here
     else:
         log("[tracker] STANDBY mode — skip update_open_trades + open_trade_if_eligible")
 
