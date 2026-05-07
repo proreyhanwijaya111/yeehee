@@ -212,6 +212,9 @@ export interface EaHeartbeat {
   account_equity:   number | null
   open_positions:   number | null
   is_paused:        boolean
+  // Migration 012 (2026-05-07): dynamic leverage. NULL on legacy EAs.
+  // Value = MT5 ACCOUNT_LEVERAGE int (e.g. 500 means 1:500). 0 = unlimited.
+  account_leverage?: number | null
 }
 
 export interface EaConfig {
@@ -232,8 +235,10 @@ export interface EaConfig {
 }
 
 export async function getEaHeartbeat(): Promise<EaHeartbeat | null> {
+  // Use select=* so account_leverage included if migration 012 applied
+  // (graceful: PostgREST returns existing columns only, missing col = ignored).
   const rows = await supabaseGet<Array<Record<string, unknown>>>(
-    'rcs_ea_heartbeat?select=ea_instance_id,account_login,ts,account_balance,account_equity,open_positions,is_paused&order=ts.desc&limit=1',
+    'rcs_ea_heartbeat?select=*&order=ts.desc&limit=1',
     { revalidate: 30 },
   )
   if (!rows || rows.length === 0) return null
@@ -246,6 +251,7 @@ export async function getEaHeartbeat(): Promise<EaHeartbeat | null> {
     account_equity:  r.account_equity != null ? Number(r.account_equity) : null,
     open_positions:  r.open_positions != null ? Number(r.open_positions) : null,
     is_paused:      Boolean(r.is_paused),
+    account_leverage: r.account_leverage != null ? Number(r.account_leverage) : null,
   }
 }
 

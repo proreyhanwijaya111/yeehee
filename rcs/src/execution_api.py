@@ -126,6 +126,10 @@ class HeartbeatPayload(BaseModel):
     account_equity:   Optional[float] = None
     open_positions:   Optional[int] = None
     is_paused:        bool = False
+    # 2026-05-07: dynamic leverage display (migration 012). Legacy EAs (v0.2.0
+    # and earlier) don't send this -> Optional. AccountInfoInteger(ACCOUNT_LEVERAGE)
+    # returns int (e.g. 500 means 1:500). 0 means unlimited / undefined.
+    account_leverage: Optional[int] = None
 
 
 # ─── Endpoints ───────────────────────────────────────────────────────────────────
@@ -351,18 +355,33 @@ def heartbeat(payload: HeartbeatPayload):
     supa = _get_supabase()
     if not supa:
         raise HTTPException(503, "Supabase not configured")
+    payload_dict = {
+        "ea_instance_id":  payload.ea_instance_id,
+        "account_login":   payload.account_login,
+        "ts":              datetime.now(timezone.utc).isoformat(),
+        "account_balance": payload.account_balance,
+        "account_equity":  payload.account_equity,
+        "open_positions":  payload.open_positions,
+        "is_paused":       payload.is_paused,
+    }
+    # account_leverage requires migration 012. Try with, fallback without
+    # if column doesn't exist yet (graceful degradation).
+    if payload.account_leverage is not None:
+        payload_dict["account_leverage"] = payload.account_leverage
     try:
-        supa.from_("rcs_ea_heartbeat").insert({
-            "ea_instance_id":  payload.ea_instance_id,
-            "account_login":   payload.account_login,
-            "ts":              datetime.now(timezone.utc).isoformat(),
-            "account_balance": payload.account_balance,
-            "account_equity":  payload.account_equity,
-            "open_positions":  payload.open_positions,
-            "is_paused":       payload.is_paused,
-        }).execute()
+        supa.from_("rcs_ea_heartbeat").insert(payload_dict).execute()
         return {"ok": True, "received_at": datetime.now(timezone.utc).isoformat()}
     except Exception as e:
+        # Retry without account_leverage if migration 012 not yet applied
+        msg = str(e).lower()
+        if payload.account_leverage is not None and ("account_leverage" in msg or "column" in msg):
+            payload_dict.pop("account_leverage", None)
+            try:
+                supa.from_("rcs_ea_heartbeat").insert(payload_dict).execute()
+                return {"ok": True, "received_at": datetime.now(timezone.utc).isoformat(),
+                        "warning": "account_leverage dropped (migration 012 not applied)"}
+            except Exception as e2:
+                raise HTTPException(500, f"DB error (retry): {e2}")
         raise HTTPException(500, f"DB error: {e}")
 
 

@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
 //|                                                  DextradeEA.mq5  |
-//|                                       yeehee / dextrade — v0.2.0 |
+//|                                       yeehee / dextrade — v0.2.1 |
 //|                                                                  |
 //| RCS auto-executor with:                                          |
 //|  - Dynamic config polling from FastAPI (no EA restart for tweak) |
@@ -16,7 +16,7 @@
 //+------------------------------------------------------------------+
 #property copyright "yeehee / dextrade"
 #property link      "https://yeehee.vercel.app"
-#property version   "0.2.0"
+#property version   "0.2.1"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -93,7 +93,7 @@ int      g_config_poll_interval  = 60;   // refresh API config every 60s
 // ============================================================================
 int OnInit()
 {
-    Print("[DextradeEA] v0.2.0 init");
+    Print("[DextradeEA] v0.2.1 init");
     SetSafeDefaults();
     PollConfig();   // initial fetch
 
@@ -440,11 +440,17 @@ bool HttpPost(string url, string body)
 
 void SendHeartbeat(bool is_paused)
 {
+    // v0.2.1 (2026-05-07): added account_leverage so /portfolio panel shows
+    // dynamic leverage matching Exness setting (e.g. 1:500, 1:1000, 1:Unlimited)
+    // instead of hardcoded "1:Unlimited" label. Backend graceful fallback if
+    // migration 012 not yet applied -- field dropped, payload still accepted.
+    long leverage = AccountInfoInteger(ACCOUNT_LEVERAGE);
     string body = StringFormat(
-        "{\"ea_instance_id\":\"%s\",\"account_login\":%I64d,\"account_balance\":%.2f,\"account_equity\":%.2f,\"open_positions\":%d,\"is_paused\":%s}",
+        "{\"ea_instance_id\":\"%s\",\"account_login\":%I64d,\"account_balance\":%.2f,\"account_equity\":%.2f,\"open_positions\":%d,\"is_paused\":%s,\"account_leverage\":%I64d}",
         EaInstanceId, AccountInfoInteger(ACCOUNT_LOGIN),
         AccountInfoDouble(ACCOUNT_BALANCE), AccountInfoDouble(ACCOUNT_EQUITY),
-        CountOurPositions(), is_paused ? "true" : "false"
+        CountOurPositions(), is_paused ? "true" : "false",
+        leverage
     );
     HttpPost(ApiBaseUrl + "/api/ea/heartbeat", body);
 }

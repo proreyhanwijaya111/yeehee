@@ -127,6 +127,11 @@ export default function PortfolioClient({ openTrades, closedTrades, stats, xauPr
     })
   }, [filteredClosedAll, range])
 
+  // User spec 2026-05-07: BEP/expired trades (pnl_pct == 0) counted as WIN.
+  // Loss only if pnl_pct < 0 (actual portfolio drawdown). This matches user's
+  // mental model: "kalau sl bep terhitung win, kalah hanya jika minus portfolio".
+  // Win-rate denominator = total closed (wins+losses, no other categories).
+
   // Per-style breakdown stats (pct-based) — pct uses trade.risk_pct per trade
   const breakdown = useMemo(() => {
     const result: Record<string, { wins: number; losses: number; total_pct: number; n: number; avg_duration_ms: number }> = {
@@ -140,7 +145,7 @@ export default function PortfolioClient({ openTrades, closedTrades, stats, xauPr
       b.n++
       const pct = pctFromR(t.pnl_r, t.risk_pct)
       b.total_pct += pct
-      if (pct > 0) b.wins++
+      if (pct >= 0) b.wins++   // BEP/expired with pnl 0 counted as WIN per user spec
       else b.losses++
       if (t.opened_at && t.closed_at) {
         b.avg_duration_ms += new Date(t.closed_at).getTime() - new Date(t.opened_at).getTime()
@@ -153,23 +158,38 @@ export default function PortfolioClient({ openTrades, closedTrades, stats, xauPr
   }, [closedTrades])
 
   // Aggregate portfolio % stats (replaces server-side R-based stats).
+  // User spec 2026-05-07: pnl_pct == 0 (BEP/expired-flat) hitung WIN.
+  // Track granular: actual TP wins (pct>0), BEP (pct==0), losses (pct<0).
+  // Display "wins" = TP + BEP combined per user rule.
   const pctStats = useMemo(() => {
-    let total = 0, wins = 0, losses = 0, n = 0, sumWin = 0, sumLoss = 0
+    let total = 0
+    let actualWins = 0, bep = 0, losses = 0, n = 0
+    let sumActualWin = 0, sumLoss = 0
     for (const t of closedTrades) {
       const pct = pctFromR(t.pnl_r, t.risk_pct)
       total += pct
       n++
-      if (pct > 0) { wins++; sumWin += pct }
-      else if (pct < 0) { losses++; sumLoss += pct }
+      if (pct > 0) {
+        actualWins++
+        sumActualWin += pct
+      } else if (pct < 0) {
+        losses++
+        sumLoss += pct
+      } else {
+        bep++   // pct == 0 (SL moved to BEP, or expired at flat — counted as win)
+      }
     }
+    const wins = actualWins + bep   // user spec: BEP counts as win
     return {
       total_pct:  total,
       avg_pct:    n > 0 ? total / n : 0,
-      avg_win:    wins > 0 ? sumWin / wins : 0,
+      avg_actual_win: actualWins > 0 ? sumActualWin / actualWins : 0,
       avg_loss:   losses > 0 ? sumLoss / losses : 0,
       win_rate:   n > 0 ? wins / n : 0,
       n_closed:   n,
-      n_wins:     wins,
+      n_wins:     wins,            // includes BEP per user spec
+      n_actual_wins: actualWins,   // strictly pct > 0
+      n_bep:      bep,
       n_losses:   losses,
     }
   }, [closedTrades])
@@ -315,11 +335,31 @@ function EaStatusCard({
   const heartbeatStale = heartbeatAge == null || heartbeatAge > 120
   const eaOnline = !!heartbeat && !heartbeatStale && !heartbeat.is_paused
 
+  // Two-axis state: config (intent) vs runtime (actual). User audit 2026-05-07:
+  // showing "LIVE" badge while panel says "EA tidak terhubung" was confusing
+  // because LIVE was config intent only — actual status was OFFLINE.
+  // Now badge prioritizes runtime: OFFLINE if not online, regardless of config.
+  // Config intent shown separately as subtitle below ID.
   const liveMode = !!config?.enable_execution && !config.enable_paper
-  const modeLabel = !config ? '?' : (config.enable_execution
+  const configIntent = !config ? '?' : (config.enable_execution
     ? (config.enable_paper ? 'PAPER' : 'LIVE')
     : 'OFF')
-  const modeTone = !config ? 'slate' : (liveMode ? 'emerald' : (config.enable_execution ? 'amber' : 'slate'))
+  // Badge reflects RUNTIME state first, falls back to config intent only when
+  // runtime info missing (EA never connected).
+  const modeLabel = (() => {
+    if (!config) return '?'
+    if (heartbeat == null && config.enable_execution) return 'OFFLINE'
+    if (heartbeat?.is_paused) return 'PAUSED'
+    if (heartbeat && !eaOnline) return 'STALE'
+    return configIntent
+  })()
+  const modeTone = (() => {
+    if (modeLabel === 'OFFLINE' || modeLabel === 'STALE') return 'rose'
+    if (modeLabel === 'PAUSED') return 'amber'
+    if (modeLabel === 'LIVE') return 'emerald'
+    if (modeLabel === 'PAPER') return 'amber'
+    return 'slate'
+  })()
 
   // RED ALARM: execution enabled tapi EA offline / no heartbeat. User audit
   // 2026-05-07 -- panel sebelumnya silent abu-abu, gampang ke-skip. Sekarang
@@ -368,11 +408,18 @@ function EaStatusCard({
               <span className={cn(
                 'text-[9px] uppercase tracking-wide font-bold px-1.5 py-0.5 rounded border leading-none',
                 modeTone === 'emerald' ? 'bg-emerald-700/30 text-emerald-200 border-emerald-700/40' :
+                modeTone === 'rose'    ? 'bg-rose-700/30 text-rose-200 border-rose-700/40' :
                 modeTone === 'amber'   ? 'bg-amber-700/30 text-amber-200 border-amber-700/40' :
                                           'bg-slate-700/30 text-slate-300 border-slate-700/40',
               )}>
                 {modeLabel}
               </span>
+              {/* Show config intent separately when runtime ≠ intent */}
+              {modeLabel !== configIntent && (
+                <span className="text-[8px] uppercase tracking-wide text-slate-500 font-medium">
+                  config: {configIntent}
+                </span>
+              )}
               {heartbeat?.is_paused && (
                 <span className="text-[9px] uppercase tracking-wide font-bold px-1.5 py-0.5 rounded border leading-none bg-amber-700/30 text-amber-200 border-amber-700/40 flex items-center gap-1">
                   <AlertTriangle size={9} /> PAUSED
@@ -423,7 +470,18 @@ function EaStatusCard({
           </div>
           <div className="flex items-center justify-between">
             <span className="text-slate-500">Leverage</span>
-            <span className="font-mono text-slate-200">1 : Unlimited <span className="text-slate-500">(Exness demo)</span></span>
+            <span className="font-mono text-slate-200">
+              {(() => {
+                const lev = heartbeat?.account_leverage
+                if (lev == null) {
+                  return <>— <span className="text-slate-500 text-[10px]">(EA blm kirim — perlu migration 012 + EA recompile)</span></>
+                }
+                if (lev <= 0) {
+                  return <>1 : Unlimited <span className="text-slate-500">(broker)</span></>
+                }
+                return <>1 : {lev.toLocaleString()} <span className="text-slate-500">(broker)</span></>
+              })()}
+            </span>
           </div>
           <div className="flex items-center justify-between">
             <span className="text-slate-500">Daily loss kill-switch</span>
@@ -498,7 +556,9 @@ function BreakdownCard({ breakdown }: { breakdown: Record<string, { wins: number
 }
 
 function StatsCard({ pctStats, openCount, expired }: {
-  pctStats: { total_pct: number; avg_pct: number; avg_win: number; avg_loss: number; win_rate: number; n_closed: number; n_wins: number; n_losses: number }
+  pctStats: { total_pct: number; avg_pct: number; avg_actual_win: number; avg_loss: number;
+              win_rate: number; n_closed: number; n_wins: number; n_actual_wins: number;
+              n_bep: number; n_losses: number }
   openCount: number
   expired: number
 }) {
@@ -563,10 +623,12 @@ function StatsCard({ pctStats, openCount, expired }: {
           )
         })()}
 
-        {/* Sub stats grid */}
+        {/* Sub stats grid — Wins includes BEP per user spec 2026-05-07 */}
         <div className="grid grid-cols-3 gap-px bg-slate-800/60">
           <Cell label="Wins"  value={`${pctStats.n_wins}`}   tone="ok"
-                sub={`avg ${fmtPctSigned(pctStats.avg_win)}`} />
+                sub={pctStats.n_bep > 0
+                  ? `${pctStats.n_actual_wins} TP + ${pctStats.n_bep} BEP · avg ${fmtPctSigned(pctStats.avg_actual_win)}`
+                  : `avg ${fmtPctSigned(pctStats.avg_actual_win)}`} />
           <Cell label="Losses" value={`${pctStats.n_losses}`} tone="bad"
                 sub={`avg ${fmtPctSigned(pctStats.avg_loss)}`} />
           <Cell label="Open"   value={`${openCount}`} tone="neutral"
