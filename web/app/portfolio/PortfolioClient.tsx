@@ -811,7 +811,15 @@ function TradeRow({ trade, live, xauPrice, onRefresh, onClosedOptimistically }: 
         <div className="text-right shrink-0">
           <span className={cn('text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded border',
             statusColor)}>
-            {STATUS_LABEL[trade.status]}
+            {/* Granular exit label: distinguish BEP/TRAIL exits from original SL hits */}
+            {(() => {
+              const r = trade.exit_reason
+              if (trade.status === 'SL' && r === 'bep_hit')         return 'BEP exit'
+              if (trade.status === 'SL' && r === 'trailing_sl_hit') return 'TRAIL exit'
+              if (trade.status === 'SL' && r === 'stop_out')        return 'STOP-OUT'
+              if (trade.status === 'MANUAL' && r?.startsWith('manual_')) return 'Manual'
+              return STATUS_LABEL[trade.status]
+            })()}
           </span>
           {!live && trade.pnl_r !== null && (
             <p className={cn('text-xs font-mono font-bold tabular-nums mt-1',
