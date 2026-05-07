@@ -88,10 +88,11 @@ def sweep_orphans(store, log=print) -> dict[str, int]:
     if not orphans:
         return out
 
-    # Ensure MT5 connected. Caller should have already connected; but verify.
+    # Ensure MT5 connected. If not, treat as skip (NOT error) — daemon may
+    # init mt5 lazily when fetching candles. Sweeper just defers reconcile to
+    # next cycle when mt5 is connected. errors=0 = no false alarm.
     if not mt5.terminal_info():
-        log("[orphan_sweeper] MT5 not initialized — skip cycle")
-        return {**out, "errors": len(orphans)}
+        return {"scanned": len(orphans), "reconciled": 0, "still_open": 0, "errors": 0, "skipped_no_mt5": 1}
 
     for row in orphans:
         ticket = row.get("mt5_ticket_id")
