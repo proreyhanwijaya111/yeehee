@@ -31,13 +31,19 @@ const RANGE_DAYS: Record<RangeFilter, number | null> = {
 }
 
 interface Props {
+  // Paper tracker (active_trades) — daemon auto-sim every signal
   openTrades:   ActiveTrade[]
   closedTrades: ActiveTrade[]
+  // Real broker (rcs_executions) — actual EA OrderSend
+  realOpen?:    ActiveTrade[]
+  realClosed?:  ActiveTrade[]
   stats:        PortfolioStats | null
   xauPrice:     number | null   // current spot for live trades chart
   eaHeartbeat?: EaHeartbeat | null
   eaConfig?:    EaConfig | null
 }
+
+type DataSource = 'real' | 'paper'
 
 // Default risk per trade when trade.risk_pct is null (legacy pre-migration 004
 // rows). Profile "moderat" cap = 1.0% of equity. Used only as fallback.
@@ -84,19 +90,27 @@ const STATUS_TONE: Record<TradeStatus, 'open' | 'win' | 'loss' | 'neutral'> = {
   SL: 'loss', EXPIRED: 'neutral', MANUAL: 'neutral',
 }
 
-export default function PortfolioClient({ openTrades, closedTrades, stats, xauPrice, eaHeartbeat = null, eaConfig = null }: Props) {
+export default function PortfolioClient({
+  openTrades, closedTrades,
+  realOpen = [], realClosed = [],
+  stats, xauPrice, eaHeartbeat = null, eaConfig = null,
+}: Props) {
   const [filter, setFilter] = useState<StyleFilter>('all')
   const [range,  setRange]  = useState<RangeFilter>('recent')
-  // Optimistic close: trade IDs the user just closed locally. Hide immediately
-  // even before server-side revalidate (30s ISR cache) catches up. Cleared on
-  // route refresh when fresh data lands.
+  // 2026-05-07 user audit: /portfolio MUST show real broker data, not paper sim.
+  // Default = real. Paper available as toggle for forward-test view.
+  const [source, setSource] = useState<DataSource>('real')
   const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set())
   const router = useRouter()
 
+  // Pick active dataset based on toggle
+  const sourceOpen   = source === 'real' ? realOpen   : openTrades
+  const sourceClosed = source === 'real' ? realClosed : closedTrades
+
   // Filter both lists by style + drop optimistically-closed
-  const filteredOpen = (filter === 'all' ? openTrades : openTrades.filter(t => t.style === filter))
+  const filteredOpen = (filter === 'all' ? sourceOpen : sourceOpen.filter(t => t.style === filter))
     .filter(t => !hiddenIds.has(t.id))
-  const filteredClosedAll = filter === 'all' ? closedTrades : closedTrades.filter(t => t.style === filter)
+  const filteredClosedAll = filter === 'all' ? sourceClosed : sourceClosed.filter(t => t.style === filter)
 
   const handleClosedOptimistically = (tradeId: string) => {
     setHiddenIds(prev => {
@@ -128,9 +142,8 @@ export default function PortfolioClient({ openTrades, closedTrades, stats, xauPr
   }, [filteredClosedAll, range])
 
   // User spec 2026-05-07: BEP/expired trades (pnl_pct == 0) counted as WIN.
-  // Loss only if pnl_pct < 0 (actual portfolio drawdown). This matches user's
-  // mental model: "kalau sl bep terhitung win, kalah hanya jika minus portfolio".
-  // Win-rate denominator = total closed (wins+losses, no other categories).
+  // Loss only if pnl_pct < 0 (actual portfolio drawdown).
+  // Stats compute from selected source (real broker default, paper toggle).
 
   // Per-style breakdown stats (pct-based) — pct uses trade.risk_pct per trade
   const breakdown = useMemo(() => {
@@ -139,7 +152,7 @@ export default function PortfolioClient({ openTrades, closedTrades, stats, xauPr
       intraday: { wins: 0, losses: 0, total_pct: 0, n: 0, avg_duration_ms: 0 },
       swing:    { wins: 0, losses: 0, total_pct: 0, n: 0, avg_duration_ms: 0 },
     }
-    for (const t of closedTrades) {
+    for (const t of sourceClosed) {
       const b = result[t.style]
       if (!b) continue
       b.n++
@@ -155,7 +168,7 @@ export default function PortfolioClient({ openTrades, closedTrades, stats, xauPr
       if (result[k].n > 0) result[k].avg_duration_ms /= result[k].n
     }
     return result
-  }, [closedTrades])
+  }, [sourceClosed])
 
   // Aggregate portfolio % stats (replaces server-side R-based stats).
   // User spec 2026-05-07: pnl_pct == 0 (BEP/expired-flat) hitung WIN.
@@ -165,7 +178,7 @@ export default function PortfolioClient({ openTrades, closedTrades, stats, xauPr
     let total = 0
     let actualWins = 0, bep = 0, losses = 0, n = 0
     let sumActualWin = 0, sumLoss = 0
-    for (const t of closedTrades) {
+    for (const t of sourceClosed) {
       const pct = pctFromR(t.pnl_r, t.risk_pct)
       total += pct
       n++
@@ -192,7 +205,7 @@ export default function PortfolioClient({ openTrades, closedTrades, stats, xauPr
       n_bep:      bep,
       n_losses:   losses,
     }
-  }, [closedTrades])
+  }, [sourceClosed])
 
   return (
     <main className="max-w-lg mx-auto px-4 pt-4 pb-2 animate-fade-in">
@@ -210,16 +223,46 @@ export default function PortfolioClient({ openTrades, closedTrades, stats, xauPr
         <RefreshButton onRefresh={() => router.refresh()} />
       </header>
 
-      <div className="space-y-5">
+      <div className="space-y-4">
         {/* EA / MT5 Demo Account status — shows real broker info so user can sync */}
         <EaStatusCard heartbeat={eaHeartbeat} config={eaConfig} xauPrice={xauPrice} />
 
+        {/* Source toggle: REAL broker vs PAPER forward-test (user audit 2026-05-07) */}
+        <div className="grid grid-cols-2 gap-px bg-slate-800/80 rounded-xl overflow-hidden p-px">
+          {([
+            { v: 'real',  l: `Real (broker)`,  c: realClosed.length },
+            { v: 'paper', l: `Paper (sim)`,    c: closedTrades.length },
+          ] as { v: DataSource; l: string; c: number }[]).map(opt => (
+            <button
+              key={opt.v}
+              onClick={() => setSource(opt.v)}
+              className={cn(
+                'py-2 px-2 text-[11px] font-semibold transition-colors rounded-[10px] flex items-center justify-center gap-1.5',
+                source === opt.v
+                  ? (opt.v === 'real' ? 'bg-emerald-900/40 text-emerald-100' : 'bg-amber-900/40 text-amber-100')
+                  : 'bg-slate-900/40 text-slate-400',
+              )}
+              title={opt.v === 'real'
+                ? 'Real broker trades (rcs_executions). Truth source.'
+                : 'Paper forward-test (active_trades). Daemon sim, NOT real money.'}
+            >
+              {opt.l}
+              <span className="text-[9px] opacity-60 font-mono">{opt.c}</span>
+            </button>
+          ))}
+        </div>
+
         {pctStats.n_closed > 0 ? (
-          <StatsCard pctStats={pctStats} openCount={stats?.open_count ?? openTrades.length} expired={stats?.expired ?? 0} />
-        ) : <EmptyStats />}
+          <StatsCard
+            pctStats={pctStats}
+            openCount={stats?.open_count ?? sourceOpen.length}
+            expired={stats?.expired ?? 0}
+            sourceLabel={source === 'real' ? 'real broker' : 'paper sim'}
+          />
+        ) : <EmptyStats sourceLabel={source} />}
 
         {/* Per-style breakdown */}
-        {closedTrades.length > 0 && <BreakdownCard breakdown={breakdown} />}
+        {sourceClosed.length > 0 && <BreakdownCard breakdown={breakdown} />}
 
         {/* Style filter pills */}
         <div>
@@ -559,12 +602,13 @@ function BreakdownCard({ breakdown }: { breakdown: Record<string, { wins: number
   )
 }
 
-function StatsCard({ pctStats, openCount, expired }: {
+function StatsCard({ pctStats, openCount, expired, sourceLabel }: {
   pctStats: { total_pct: number; avg_pct: number; avg_actual_win: number; avg_loss: number;
               win_rate: number; n_closed: number; n_wins: number; n_actual_wins: number;
               n_bep: number; n_losses: number }
   openCount: number
   expired: number
+  sourceLabel?: string
 }) {
   const closed = pctStats.n_closed
   const winrate = pctStats.win_rate * 100
@@ -578,7 +622,7 @@ function StatsCard({ pctStats, openCount, expired }: {
     <div>
       <div className="flex items-center justify-between mb-1.5 px-2">
         <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-widest">
-          Performance (% portfolio)
+          Performance{sourceLabel ? ` · ${sourceLabel}` : ''} (% portfolio)
         </p>
         <p className="text-[10px] text-slate-500">
           <span className="font-mono">{closed}</span> trade · <span className={reliability.color}>{reliability.label}</span>
@@ -643,14 +687,18 @@ function StatsCard({ pctStats, openCount, expired }: {
   )
 }
 
-function EmptyStats() {
+function EmptyStats({ sourceLabel }: { sourceLabel?: DataSource }) {
+  const isReal = sourceLabel === 'real'
   return (
     <div className="bg-slate-800/40 border border-slate-800 rounded-2xl px-4 py-5 text-center">
       <Activity size={28} className="text-slate-500 mx-auto mb-2" />
-      <p className="text-sm font-semibold text-slate-300 mb-1">Belum ada history</p>
+      <p className="text-sm font-semibold text-slate-300 mb-1">
+        {isReal ? 'Belum ada trade real broker' : 'Belum ada history'}
+      </p>
       <p className="text-[11px] text-slate-500 leading-relaxed max-w-xs mx-auto">
-        Win rate akan muncul setelah trade pertama tertutup (TP/SL hit).
-        Daemon perlu beberapa hari untuk akumulasi 30+ trades buat stats valid.
+        {isReal
+          ? 'EA belum execute trade qualifying (LONG/SHORT, conf ≥65%). Switch ke Paper untuk lihat forward-test sim.'
+          : 'Win rate akan muncul setelah trade pertama tertutup. Daemon perlu beberapa hari untuk akumulasi 30+ trades.'}
       </p>
     </div>
   )

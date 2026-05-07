@@ -202,6 +202,103 @@ export async function getDaemonHeartbeatServer(): Promise<{
   }
 }
 
+// ── REAL EA broker trades (rcs_executions) ────────────────────────────────────
+// User audit 2026-05-07 ~11:15 WIB: /portfolio sebelumnya tampil dari
+// active_trades (PAPER tracker, daemon auto-sim every signal). User mau
+// REAL broker performance only. Map rcs_executions -> ActiveTrade-shape so
+// PortfolioClient bisa render tanpa schema rewrite.
+
+/** Map rcs_executions.status -> ActiveTrade.status (TradeStatus union). */
+function mapExecStatus(execStatus: string): TradeStatus {
+  if (execStatus === 'OPEN' || execStatus === 'PENDING_BROKER') return 'OPEN'
+  if (execStatus === 'CLOSED_TP') return 'TP1'
+  if (execStatus === 'CLOSED_SL') return 'SL'
+  if (execStatus === 'CLOSED_MANUAL') return 'MANUAL'
+  if (execStatus === 'CLOSED_TRAILING') return 'SL'  // trailing exit ≈ SL hit (at locked level)
+  if (execStatus === 'CLOSED_NEWS') return 'EXPIRED'
+  return 'MANUAL'
+}
+
+/** Map rcs_signals.timeframe -> ActiveTrade.style. */
+function mapTfToStyle(tf: string | null | undefined): 'scalper' | 'intraday' | 'swing' {
+  if (tf === 'M5') return 'scalper'
+  if (tf === 'M15') return 'intraday'
+  if (tf === 'H1') return 'swing'
+  return 'scalper'
+}
+
+/** Real broker trades (rcs_executions joined with rcs_signals direction).
+ *  Returns ActiveTrade-shape for UI compat. Only includes rows that ACTUALLY
+ *  hit the broker (status NOT 'REJECTED' AND signal_id NOT NULL). REJECTED
+ *  rows = EA gate rejection, not broker fills.
+ */
+export async function getRealEaTrades(opts?: { limit?: number }): Promise<ActiveTrade[]> {
+  const limit = opts?.limit ?? 100
+  // Single query with PostgREST relationship: rcs_executions + nested rcs_signals
+  const rows = await supabaseGet<Array<Record<string, unknown>>>(
+    `rcs_executions?select=*,rcs_signals!inner(direction,timeframe,confidence_pct)&status=neq.REJECTED&order=requested_at.desc&limit=${limit}`,
+    { revalidate: 30 },
+  )
+  if (!rows || rows.length === 0) return []
+  const result: ActiveTrade[] = []
+  for (const r of rows) {
+    const sig = (r.rcs_signals ?? {}) as Record<string, unknown>
+    const entry  = Number(r.execution_price ?? 0)
+    const sl     = Number(r.execution_sl ?? 0)
+    const tp1    = Number(r.execution_tp ?? 0) || null
+    const closeP = r.close_price != null ? Number(r.close_price) : null
+    const pnlMoney = r.pnl_money != null ? Number(r.pnl_money) : null
+    const balAtOpen = r.account_balance_at_open != null ? Number(r.account_balance_at_open) : null
+    // Compute pnl_pct from money / starting balance
+    const pnlPct = (pnlMoney != null && balAtOpen) ? (pnlMoney / balAtOpen) * 100 : null
+    // pnl_r = realized money / risk money (1R = balance × risk_pct)
+    const riskPct = r.risk_pct_used != null ? Number(r.risk_pct_used) / 100 : 0.01
+    const riskUSD = balAtOpen ? balAtOpen * riskPct : null
+    const pnlR = (pnlMoney != null && riskUSD) ? pnlMoney / riskUSD : null
+    const status = mapExecStatus(String(r.status ?? 'MANUAL'))
+    result.push({
+      id:               String(r.id),
+      bundle_id:        null,   // rcs_executions doesn't link to signal_bundles directly
+      style:            mapTfToStyle(sig.timeframe as string),
+      side:             (sig.direction === 'SHORT' ? 'SHORT' : 'LONG') as 'LONG' | 'SHORT',
+      signal_strength:  null,
+      confidence:       sig.confidence_pct != null ? Number(sig.confidence_pct) / 100 : null,
+      entry,
+      sl,
+      tp1,
+      tp2:              null,
+      tp3:              null,
+      status,
+      hit_tp1:          status === 'TP1' || status === 'TP2' || status === 'TP3',
+      hit_tp2:          status === 'TP2' || status === 'TP3',
+      hit_tp3:          status === 'TP3',
+      hit_sl:           status === 'SL',
+      high_after_open:  null,
+      low_after_open:   null,
+      opened_at:        String(r.executed_at ?? r.requested_at ?? ''),
+      expiry_at:        '',
+      closed_at:        r.closed_at as string | null,
+      exit_price:       closeP,
+      exit_reason:      r.close_reason as string | null,
+      pnl_r:            pnlR,
+      pnl_pct:          pnlPct,
+      reasons:          [],
+      risks:            [],
+      regime:           null,
+      session:          null,
+      risk_pct:         riskPct,
+      kelly_fraction:   null,
+      profile:          null,
+      prior_winrate:    null,
+      prior_avg_win_r:  null,
+      prior_n_closed:   null,
+      original_sl:      sl,
+      sl_moved_at:      null,
+    })
+  }
+  return result
+}
+
 // ── EA heartbeat (real MT5 demo account) ───────────────────────────────────────
 
 export interface EaHeartbeat {

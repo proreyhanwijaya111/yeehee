@@ -70,6 +70,46 @@ export default function HeroCard({ bundle, isExecuted = false }: Props) {
     action === 'SHORT'  ? 'border-red-500/30' :
                           'border-slate-600/30'
 
+  // 2026-05-07 user audit: TUNGGU/FLAT card was eating too much vertical
+  // space (regime tags, FLAT explanation block, big confidence bar). For
+  // FLAT/EXPIRED states user just needs price + status — strip filler.
+  // Active LONG/SHORT keeps full detail (where decision context matters).
+  if (isFlat || isExpired) {
+    return (
+      <div className={cn(
+        'bg-gradient-to-br rounded-2xl px-4 py-3 border',
+        bgGradient, borderColor,
+      )}>
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex-1 min-w-0">
+            <p className={cn(
+              'text-2xl font-black tracking-tight leading-none',
+              isExpired && 'opacity-60',
+            )}>
+              {isExpired ? 'EXPIRED' : 'TUNGGU'}
+            </p>
+            <p className="text-[11px] mt-1 opacity-70">
+              {isExpired ? 'Menunggu cycle berikutnya' : 'Belum ada konsensus'}
+              <span className="opacity-50"> · {sessionInfo.label}</span>
+            </p>
+          </div>
+          <div className="text-right shrink-0">
+            <p className="text-[10px] opacity-60 uppercase tracking-wider">XAU/USD</p>
+            <p className="text-lg font-black tabular-nums leading-tight">
+              ${fmtPrice(bundle.xau_price)}
+            </p>
+            {bundle.timestamp && (
+              <p className="text-[9px] opacity-40 mt-0.5">
+                {ageMinutes(bundle.timestamp)}m lalu
+              </p>
+            )}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // Active directional signal — full detail layout
   return (
     <div className={cn(
       'bg-gradient-to-br rounded-3xl p-5 border card-shadow-lg hero-live',
@@ -79,29 +119,24 @@ export default function HeroCard({ bundle, isExecuted = false }: Props) {
         {/* Left: action */}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <p className={cn(
-              'text-4xl font-black tracking-tight leading-none',
-              isExpired && 'opacity-60',
-            )}>
-              {isExpired ? 'EXPIRED' : ACTION_LABEL[action]}
+            <p className="text-4xl font-black tracking-tight leading-none">
+              {ACTION_LABEL[action]}
             </p>
-            {isExecuted && !isFlat && (
+            {isExecuted && (
               <span className="text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded border bg-emerald-700/30 text-emerald-200 border-emerald-700/40 flex items-center gap-1">
                 <CheckCircle2 size={10} /> EXECUTED
               </span>
             )}
           </div>
-          <p className={cn('mt-1.5 text-sm font-semibold', isExpired ? 'opacity-50' : 'opacity-90')}>
-            {isExpired ? 'Menunggu cycle berikutnya' : STRENGTH_LABEL[strength]}
+          <p className="mt-1.5 text-sm font-semibold opacity-90">
+            {STRENGTH_LABEL[strength]}
           </p>
-          {!isExpired && (
-            <p className="mt-0.5 text-xs opacity-70">
-              {strDesc}
-            </p>
-          )}
+          <p className="mt-0.5 text-xs opacity-70">
+            {strDesc}
+          </p>
 
-          {/* Confidence bar OR countdown — only shown when ACTIVE (or always for FLAT) */}
-          {!isExpired && (!isFlat && bundle.timestamp ? (
+          {/* Confidence bar / countdown */}
+          {bundle.timestamp ? (
             <div className="mt-3">
               <div className="flex items-center gap-2">
                 <div className="flex-1 bg-black/25 rounded-full h-1.5 overflow-hidden">
@@ -135,7 +170,7 @@ export default function HeroCard({ bundle, isExecuted = false }: Props) {
                 {fmtPct(confidence)} yakin
               </span>
             </div>
-          ))}
+          )}
 
           {/* Context tags */}
           <div className="mt-2.5 flex flex-wrap gap-1.5">
@@ -146,13 +181,6 @@ export default function HeroCard({ bundle, isExecuted = false }: Props) {
               {sessionInfo.label}
             </span>
           </div>
-
-          {/* FLAT explanation */}
-          {action === 'FLAT' && (
-            <p className="mt-3 text-xs opacity-70 bg-black/15 rounded-xl px-3 py-2 leading-relaxed">
-              {explainFlat(bundle.intraday_signal?.reasons ?? [])}
-            </p>
-          )}
         </div>
 
         {/* Right: price */}
@@ -174,8 +202,8 @@ export default function HeroCard({ bundle, isExecuted = false }: Props) {
         </div>
       </div>
 
-      {/* Entry levels (jika ada sinyal aktif & belum expired) */}
-      {!isExpired && action !== 'FLAT' && bestSig && bestSig.side !== 'FLAT' && (
+      {/* Entry levels */}
+      {bestSig && bestSig.side !== 'FLAT' && (
         <div className="mt-4 grid grid-cols-4 gap-2 bg-black/15 rounded-2xl p-3">
           {[
             { label: 'Entry',  value: fmtPrice(bestSig.entry) },

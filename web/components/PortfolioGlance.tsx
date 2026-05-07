@@ -35,22 +35,20 @@ export default function PortfolioGlance({ stats, openTrades, closedTrades = [] }
   const longs   = openTrades.filter(t => t.side === 'LONG').length
   const shorts  = openTrades.filter(t => t.side === 'SHORT').length
 
-  // Compute fully client-side from closedTrades — matches /portfolio page logic
-  // exactly (which also computes pctStats from closedTrades). Eliminates
-  // mismatch caused by server view's win_rate using wrong denominator.
+  // 2026-05-07 user audit: unify with /portfolio logic. BEP (pnl_pct == 0)
+  // counted as WIN per user spec. Win-rate denominator = total closed.
+  // Eliminates Beranda 95% vs Portfolio 100% mismatch.
   let n = 0, wins = 0, losses = 0, totalPct = 0
   for (const t of closedTrades) {
     n++
     const pct = pctFromR(t.pnl_r, t.risk_pct)
     totalPct += pct
-    if (pct > 0)      wins++
-    else if (pct < 0) losses++
-    // pct == 0 (BEP/manual) excluded from both
+    if (pct >= 0)     wins++   // BEP = win per user spec
+    else              losses++
   }
   // Fallback to server stats only if no closedTrades passed
   const closed = n > 0 ? n : (stats?.closed_count ?? 0)
-  const winrateBase = wins + losses
-  const winrate = winrateBase > 0 ? (wins / winrateBase) * 100
+  const winrate = n > 0 ? (wins / n) * 100
                   : (stats?.win_rate ?? 0) * 100
   const totalReturnPct = n > 0 ? totalPct
                        : (stats?.total_pnl_r ?? 0) * DEFAULT_RISK_PCT * 100

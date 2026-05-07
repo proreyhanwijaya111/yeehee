@@ -3,6 +3,7 @@
 import HomeClient from './HomeClient'
 import {
   getLatestSignalBundle, getActiveTrades, getPortfolioStats, getLatestRcsSignal,
+  getRealEaTrades,
 } from '@/lib/server-api'
 
 export const revalidate = 60
@@ -10,17 +11,26 @@ export const revalidate = 60
 export default async function HomePage() {
   let initialBundle = null
   let serverError: string | null = null
-  const [bundleResult, openTrades, allTrades, stats, rcs] = await Promise.all([
+  // 2026-05-07: PortfolioGlance switch to REAL broker trades by default
+  // (rcs_executions). active_trades dipakai sebagai fallback only kalau
+  // belum ada real trade yet. User audit: Beranda HARUS reflect actual
+  // broker, bukan paper sim.
+  const [bundleResult, realTrades, paperOpen, paperAll, stats, rcs] = await Promise.all([
     getLatestSignalBundle().catch((e) => {
       serverError = e instanceof Error ? e.message : 'Failed to load initial signal'
       return null
     }),
+    getRealEaTrades({ limit: 100 }).catch(() => []),
     getActiveTrades({ status: 'OPEN', limit: 10 }).catch(() => []),
     getActiveTrades({ status: 'all', limit: 100 }).catch(() => []),
     getPortfolioStats().catch(() => null),
     getLatestRcsSignal('M15').catch(() => null),
   ])
-  const closedTrades = allTrades.filter(t => t.status !== 'OPEN')
+  // Prefer real trades. If empty (no EA executions yet), fallback to paper.
+  const realClosed = realTrades.filter(t => t.status !== 'OPEN')
+  const realOpen   = realTrades.filter(t => t.status === 'OPEN')
+  const closedTrades = realClosed.length > 0 ? realClosed : paperAll.filter(t => t.status !== 'OPEN')
+  const openTrades   = realClosed.length > 0 ? realOpen   : paperOpen
   initialBundle = bundleResult
   // RCS priority: 1) baked into signal_bundles row (migration 012), 2) fallback
   // to latest rcs_signals row. If bundle already has rcs, keep it.
