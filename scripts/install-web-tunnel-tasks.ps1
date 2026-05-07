@@ -5,6 +5,14 @@
 $ErrorActionPreference = 'Stop'
 $user = "$env:USERNAME"
 
+# Stop any existing npm start (port 3000) and cloudflared from prior dev runs
+# so Task Scheduler instance can claim the port cleanly.
+Get-NetTCPConnection -LocalPort 3000 -ErrorAction SilentlyContinue | ForEach-Object {
+    Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue
+}
+Get-Process cloudflared -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 2
+
 $webAction    = New-ScheduledTaskAction -Execute "C:\Users\Administrator\yeehee-daemon\scripts\start-web.cmd"
 $tunnelAction = New-ScheduledTaskAction -Execute "C:\Users\Administrator\yeehee-daemon\scripts\start-tunnel.cmd"
 $trigger      = New-ScheduledTaskTrigger -AtLogOn -User $user
