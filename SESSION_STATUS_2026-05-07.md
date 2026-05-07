@@ -1,5 +1,15 @@
 # SESSION STATUS — 2026-05-07 (PC RUMAH go-live + auto MT5 setup)
 
+> **CORRECTION 10:25 WIB**: User flagged my "running end-to-end" claim was
+> overstated. Audit showed 7 rcs_executions ALL `REJECTED` dengan reason
+> "confidence_below_threshold". Polling layer worked, EXECUTION layer always
+> rejected. Root cause: Bug #4 — `promote_signal_for_ea` updated direction
+> but NOT confidence_pct. rcs_signals stored RCS composite conf (5%) instead
+> of strategy conf (69%). Fixed di commit `b31fa85`. Still waiting for FIRST
+> OPEN execution to confirm fix works end-to-end. Until then, do NOT claim
+> "running" — claim "polling alive, execution gate fixed, awaiting first
+> qualifying signal".
+
 > **TOPOLOGY (penting, baca dulu)**: Session ini di-run dari **PC RUMAH**
 > (`DESKTOP-LHVGFIT`, IP 192.168.1.82) = WORKER. Daemon, MT5, FastAPI, EA jalan
 > di sini. **PC KANTOR** = remote dev environment, ga ada MT5/daemon. Untuk
