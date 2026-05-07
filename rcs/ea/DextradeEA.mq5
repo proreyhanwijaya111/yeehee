@@ -29,7 +29,13 @@
 // hit local FastAPI on port 8001. Whitelist URL di MT5: http://localtest.me:8001
 input string  ApiBaseUrl          = "http://localtest.me:8001";
 input string  EaInstanceId        = "ea-mt5-pcrumah-1";
-input int     PollIntervalSec     = 30;
+// PollIntervalSec — OnTimer cadence. v0.3.0 audit found 30s was too coarse:
+// spot post (5s threshold) and heartbeat (45s threshold) only fired when
+// OnTimer ran. With 30s interval, spot effectively posted every 30s (not 5s)
+// and heartbeat drifted to 60-180s gaps. 10s = balance: more reliable cadence
+// with negligible CPU overhead (OnTimer logic is fast: HTTP polls only when
+// thresholds met, not every fire).
+input int     PollIntervalSec     = 10;
 input ulong   MagicNumber         = 20260505;
 input int     SlippagePoints      = 30;
 

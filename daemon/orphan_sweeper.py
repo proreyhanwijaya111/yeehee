@@ -105,23 +105,34 @@ def sweep_orphans(store, log=print) -> dict[str, int]:
                 out["still_open"] += 1
                 continue
 
-            # Position closed at broker — fetch close deal from history
-            # Search last 7 days history (sufficient for any OPEN orphan we'd see)
+            # Position closed at broker — fetch close deal from history.
+            # NOTE 2026-05-07: mt5.history_deals_get(position=...) kwarg does NOT
+            # reliably filter on Exness MT5 builds — returns all deals in window.
+            # Must filter manually by `d.position_id == ticket`.
             from_dt = datetime.now(timezone.utc) - timedelta(days=7)
-            deals = mt5.history_deals_get(from_dt, datetime.now(timezone.utc), position=int(ticket))
+            deals = mt5.history_deals_get(from_dt, datetime.now(timezone.utc))
             if not deals:
-                log(f"[orphan_sweeper] ticket {ticket}: no deals found, skipping")
+                log(f"[orphan_sweeper] ticket {ticket}: no deals in 7d window")
                 out["errors"] += 1
                 continue
 
-            # Find the closing deal (DEAL_ENTRY_OUT)
+            # Filter deals matching this position (open + close pair).
+            position_deals = [d for d in deals if d.position_id == int(ticket)]
+            if not position_deals:
+                log(f"[orphan_sweeper] ticket {ticket}: no deals match position_id "
+                    f"(position not found in 7d history)")
+                out["errors"] += 1
+                continue
+
+            # Find the closing deal (DEAL_ENTRY_OUT or INOUT for reversal).
             close_deal = None
-            for d in deals:
-                if d.entry == mt5.DEAL_ENTRY_OUT or d.entry == mt5.DEAL_ENTRY_INOUT:
+            for d in position_deals:
+                if d.entry in (mt5.DEAL_ENTRY_OUT, mt5.DEAL_ENTRY_INOUT):
                     close_deal = d
                     break
             if not close_deal:
-                log(f"[orphan_sweeper] ticket {ticket}: no close deal, position may be partial")
+                log(f"[orphan_sweeper] ticket {ticket}: position has open deal but no close "
+                    f"deal — position may be partial or fresh open")
                 out["errors"] += 1
                 continue
 

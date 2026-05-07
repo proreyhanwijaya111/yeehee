@@ -24,9 +24,12 @@ export default function PortfolioSettingsPage() {
   const [message, setMessage] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
 
   const reset = async (scope: 'open' | 'all') => {
+    // 2026-05-07 fix: now resets BOTH paper (active_trades) + real broker
+    // (rcs_executions). User reported reset hanya jalan di paper. Default
+    // source='both' = mirror Exness reset action.
     const msg = scope === 'all'
-      ? 'Hapus SEMUA trade history (open + closed)? Tidak bisa di-undo.'
-      : 'Tutup semua trade yang masih OPEN sebagai MANUAL close (pnl=0)?'
+      ? 'Hapus SEMUA trade history (paper + real broker, open + closed)? Tidak bisa di-undo.'
+      : 'Tutup semua trade yang masih OPEN (paper + real broker) sebagai MANUAL close?'
     if (!confirm(msg)) return
     setBusy(scope)
     setMessage(null)
@@ -34,15 +37,16 @@ export default function PortfolioSettingsPage() {
       const r = await fetch('/api/portfolio/reset', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scope }),
+        body: JSON.stringify({ scope, source: 'both' }),
       })
       const j = await r.json().catch(() => ({}))
       if (!r.ok || !j.ok) {
         setMessage({ kind: 'err', text: j.error || `HTTP ${r.status}` })
       } else {
-        const n = scope === 'all' ? (j.deleted ?? 0) : (j.closed ?? 0)
         const verb = scope === 'all' ? 'di-hapus' : 'di-tutup'
-        setMessage({ kind: 'ok', text: `${n} trade ${verb}.` })
+        const paper = scope === 'all' ? (j.paper_deleted ?? 0) : (j.paper_closed ?? 0)
+        const real  = scope === 'all' ? (j.real_deleted  ?? 0) : (j.real_closed  ?? 0)
+        setMessage({ kind: 'ok', text: `Paper: ${paper} ${verb}. Real broker: ${real} ${verb}.` })
         router.refresh()
       }
     } catch (e) {
