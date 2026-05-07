@@ -282,14 +282,15 @@ void OnTimer()
         return;
     }
 
-    // Heartbeat — fire when ≥45s since last (was 60). OnTimer fires at
-    // PollIntervalSec; 60s threshold + timer drift can cause 90-100s gaps,
-    // which UI sometimes displayed as OFFLINE due to ISR cache compounding.
-    // 45s threshold ensures heartbeat sent every ~60s wall-clock.
+    // Heartbeat — only debounce g_last_heartbeat on HTTP success. If POST
+    // fails (network blip, FastAPI restart), next OnTimer retries. Previous
+    // version updated debounce regardless of result, causing silent drops
+    // when heartbeats kept failing (saw 350-549s gaps with 5/100 ratio).
     if(TimeCurrent() - g_last_heartbeat >= 45)
     {
-        SendHeartbeat(false);
-        g_last_heartbeat = TimeCurrent();
+        if(SendHeartbeat(false))
+            g_last_heartbeat = TimeCurrent();
+        // else: leave g_last_heartbeat stale — next OnTimer retries immediately
     }
 
     // Mirror broker spot every 5s — daemon uses this as Tier 0 spot source
@@ -639,12 +640,10 @@ bool HttpPostWithRetry(string url, string body, int max_attempts = 3)
     return false;
 }
 
-void SendHeartbeat(bool is_paused)
+// Returns true on success. Caller uses this to gate g_last_heartbeat update —
+// only debounce on confirmed success, otherwise next OnTimer retries.
+bool SendHeartbeat(bool is_paused)
 {
-    // v0.2.2 (2026-05-07): added account_leverage so /portfolio panel shows
-    // dynamic leverage matching Exness setting (e.g. 1:500, 1:1000, 1:Unlimited)
-    // instead of hardcoded "1:Unlimited" label. Backend graceful fallback if
-    // migration 012 not yet applied -- field dropped, payload still accepted.
     long leverage = AccountInfoInteger(ACCOUNT_LEVERAGE);
     string body = StringFormat(
         "{\"ea_instance_id\":\"%s\",\"account_login\":%I64d,\"account_balance\":%.2f,\"account_equity\":%.2f,\"open_positions\":%d,\"is_paused\":%s,\"account_leverage\":%I64d}",
@@ -653,7 +652,7 @@ void SendHeartbeat(bool is_paused)
         CountOurPositions(), is_paused ? "true" : "false",
         leverage
     );
-    HttpPost(ApiBaseUrl + "/api/ea/heartbeat", body);
+    return HttpPost(ApiBaseUrl + "/api/ea/heartbeat", body);
 }
 
 // Mirror broker bid/ask to daemon's spot endpoint. Daemon uses this as Tier 0
