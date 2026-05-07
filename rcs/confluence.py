@@ -134,17 +134,27 @@ def promote_signal_for_ea(
     if not store or not getattr(store, "has_db", False) or not rcs_signal_id:
         return False
     try:
-        # CRITICAL (2026-05-07): UPDATE `direction` to match strategy decision.
+        # CRITICAL (2026-05-07 v1): UPDATE `direction` to match strategy decision.
         # Without this, rcs_signals.direction stays as RCS indicator direction
         # (e.g. WAIT) while is_executable=true. EA reads direction from this
-        # row -> would try execute WAIT signal at unknown side. Bug discovered
-        # when /api/ea/next-signal returned id=2053 direction=WAIT conf=15%.
+        # row -> would try execute WAIT signal at unknown side.
+        #
+        # CRITICAL (2026-05-07 v2): also UPDATE `confidence_pct` to strategy
+        # decision confidence. push_rcs_signal stored RCS composite confidence
+        # (often <30%) but EA's min_confidence_pct gate compares against this
+        # field. Per-style strategy says LONG conf=0.69 (69%) but rcs_signals
+        # row had confidence_pct=5 (RCS), so EA always rejected with
+        # "confidence_below_threshold" -- 7 rejected executions before
+        # discovering this. Promoted signals must reflect the GATING decision's
+        # confidence, not the RCS indicator score.
+        confidence_pct_int = int(round(max(0.0, min(1.0, decision.confidence)) * 100))
         store._client.from_("rcs_signals").update({
             "is_executable":    True,
             "execution_status": "PENDING_PICKUP",
             "direction":        decision.side,    # LONG or SHORT (gated upstream)
+            "confidence_pct":   confidence_pct_int,  # strategy conf, not RCS
         }).eq("id", rcs_signal_id).execute()
-        log(f"[ea] PROMOTE #{rcs_signal_id} {decision.style} {decision.side} conf={decision.confidence:.2f}")
+        log(f"[ea] PROMOTE #{rcs_signal_id} {decision.style} {decision.side} conf={decision.confidence:.2f} ({confidence_pct_int}%)")
         return True
     except Exception as e:
         log(f"[ea] promote failed: {e}")
