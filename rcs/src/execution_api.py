@@ -99,7 +99,10 @@ app = FastAPI(
 # ─── Request/Response models ────────────────────────────────────────────────────
 
 class ExecutionReport(BaseModel):
-    signal_id:           int
+    # signal_id Optional: for CLOSED_* reports from EA v0.2.2+, EA only knows
+    # mt5_ticket_id. Server looks up signal_id by ticket. Open reports still
+    # require signal_id (set by EA when executing).
+    signal_id:           Optional[int] = None
     ea_instance_id:      str
     mt5_ticket_id:       Optional[int] = None
     mt5_account_login:   Optional[int] = None
@@ -303,7 +306,48 @@ def report_execution(report: ExecutionReport):
         raise HTTPException(503, "Supabase not configured")
 
     try:
-        # Insert into rcs_executions
+        is_close = report.status.startswith("CLOSED_") if report.status else False
+
+        # CLOSE FLOW (EA v0.2.2+): UPDATE existing rcs_executions row by ticket
+        # rather than INSERT new row. Eliminates duplicate-row pollution + stuck
+        # OPEN orphans. EA only knows ticket on close (signal_id mapping
+        # forgotten if EA restarted between open & close).
+        if is_close and report.mt5_ticket_id and not report.signal_id:
+            existing = (
+                supa.from_("rcs_executions")
+                .select("id, signal_id")
+                .eq("mt5_ticket_id", report.mt5_ticket_id)
+                .order("requested_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+            rows = existing.data or []
+            if not rows:
+                # No matching ticket -- log warning, INSERT anyway as orphan
+                # (server-side reconciliation can match later)
+                pass
+            else:
+                row = rows[0]
+                exec_id = row["id"]
+                resolved_signal_id = row.get("signal_id")
+                update_payload = {
+                    "status":          report.status,
+                    "closed_at":       report.closed_at or datetime.now(timezone.utc).isoformat(),
+                    "close_price":     report.close_price,
+                    "close_reason":    report.close_reason,
+                    "pnl_money":       report.pnl_money,
+                    "pnl_points":      report.pnl_points,
+                }
+                supa.from_("rcs_executions").update(update_payload).eq("id", exec_id).execute()
+                # Also flip rcs_signals to EXECUTED (terminal state)
+                if resolved_signal_id:
+                    supa.from_("rcs_signals").update({
+                        "execution_status": "EXECUTED",
+                    }).eq("id", resolved_signal_id).execute()
+                return {"ok": True, "execution_id": exec_id, "signal_id": resolved_signal_id,
+                        "execution_status": "EXECUTED", "mode": "close-by-ticket"}
+
+        # OPEN / REJECTED / legacy CLOSE flow: INSERT row
         exec_payload = {
             "signal_id":            report.signal_id,
             "mt5_ticket_id":        report.mt5_ticket_id,
@@ -328,7 +372,7 @@ def report_execution(report: ExecutionReport):
         }
         supa.from_("rcs_executions").insert(exec_payload).execute()
 
-        # Update rcs_signals.execution_status
+        # Update rcs_signals.execution_status (only when signal_id provided)
         new_signal_status = {
             "OPEN":            "EXECUTED",
             "PENDING_BROKER":  "EXECUTED",
@@ -340,9 +384,10 @@ def report_execution(report: ExecutionReport):
             "CLOSED_NEWS":     "EXECUTED",
         }.get(report.status, "PICKED_UP")
 
-        supa.from_("rcs_signals").update({
-            "execution_status": new_signal_status,
-        }).eq("id", report.signal_id).execute()
+        if report.signal_id:
+            supa.from_("rcs_signals").update({
+                "execution_status": new_signal_status,
+            }).eq("id", report.signal_id).execute()
 
         return {"ok": True, "signal_id": report.signal_id, "execution_status": new_signal_status}
     except Exception as e:

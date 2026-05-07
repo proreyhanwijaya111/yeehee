@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
 //|                                                  DextradeEA.mq5  |
-//|                                       yeehee / dextrade — v0.2.1 |
+//|                                       yeehee / dextrade — v0.2.2 |
 //|                                                                  |
 //| RCS auto-executor with:                                          |
 //|  - Dynamic config polling from FastAPI (no EA restart for tweak) |
@@ -16,7 +16,7 @@
 //+------------------------------------------------------------------+
 #property copyright "yeehee / dextrade"
 #property link      "https://yeehee.vercel.app"
-#property version   "0.2.1"
+#property version   "0.2.2"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -93,7 +93,7 @@ int      g_config_poll_interval  = 60;   // refresh API config every 60s
 // ============================================================================
 int OnInit()
 {
-    Print("[DextradeEA] v0.2.1 init");
+    Print("[DextradeEA] v0.2.2 init");
     SetSafeDefaults();
     PollConfig();   // initial fetch
 
@@ -128,6 +128,57 @@ void OnDeinit(const int reason)
 {
     EventKillTimer();
     PrintFormat("[DextradeEA] shutdown reason=%d", reason);
+}
+
+// ============================================================================
+// TRADE EVENT HANDLER — close-report (v0.2.2 2026-05-07)
+// Without this, broker-side closes (TP/SL/trailing/manual) leave rcs_executions
+// rows stuck OPEN forever -> portfolio UI shows phantom positions until manual
+// reconciliation. OnTradeTransaction fires per low-level transaction; we filter
+// for DEAL_ENTRY_OUT (position close) on our magic number.
+// ============================================================================
+void OnTradeTransaction(const MqlTradeTransaction& trans,
+                        const MqlTradeRequest& request,
+                        const MqlTradeResult& result)
+{
+    // Only react to DEAL_ADD transactions (i.e. a deal hit history)
+    if(trans.type != TRADE_TRANSACTION_DEAL_ADD) return;
+    if(trans.deal == 0) return;
+    if(!HistoryDealSelect(trans.deal)) return;
+
+    // Filter: our magic + DEAL_ENTRY_OUT (position close, not open)
+    long deal_magic = HistoryDealGetInteger(trans.deal, DEAL_MAGIC);
+    if(deal_magic != (long)MagicNumber) return;
+    long entry_type = HistoryDealGetInteger(trans.deal, DEAL_ENTRY);
+    // DEAL_ENTRY_OUT (1) = closing deal. DEAL_ENTRY_IN (0) = opening (skip — already reported).
+    // DEAL_ENTRY_INOUT (2) = reversal (treat as close for previous side).
+    if(entry_type != DEAL_ENTRY_OUT && entry_type != DEAL_ENTRY_INOUT) return;
+
+    // Extract close info from history
+    ulong  pos_id     = HistoryDealGetInteger(trans.deal, DEAL_POSITION_ID);
+    double close_p    = HistoryDealGetDouble(trans.deal, DEAL_PRICE);
+    double profit     = HistoryDealGetDouble(trans.deal, DEAL_PROFIT);
+    double commission = HistoryDealGetDouble(trans.deal, DEAL_COMMISSION);
+    double swap       = HistoryDealGetDouble(trans.deal, DEAL_SWAP);
+    long   reason     = HistoryDealGetInteger(trans.deal, DEAL_REASON);
+
+    // Map MT5 DEAL_REASON_* -> our schema status string
+    string status, close_reason_str;
+    switch((int)reason)
+    {
+        case DEAL_REASON_TP:        status = "CLOSED_TP";       close_reason_str = "tp_hit"; break;
+        case DEAL_REASON_SL:        status = "CLOSED_SL";       close_reason_str = "sl_hit"; break;
+        case DEAL_REASON_SO:        status = "CLOSED_SL";       close_reason_str = "stop_out"; break;
+        case DEAL_REASON_CLIENT:    status = "CLOSED_MANUAL";   close_reason_str = "manual_client"; break;
+        case DEAL_REASON_MOBILE:    status = "CLOSED_MANUAL";   close_reason_str = "manual_mobile"; break;
+        case DEAL_REASON_WEB:       status = "CLOSED_MANUAL";   close_reason_str = "manual_web"; break;
+        case DEAL_REASON_EXPERT:    status = "CLOSED_TRAILING"; close_reason_str = "trailing_or_bep"; break;
+        default:                    status = "CLOSED_MANUAL";   close_reason_str = StringFormat("reason_%d", (int)reason); break;
+    }
+
+    PrintFormat("[DextradeEA] CLOSE detected ticket=%I64u close=%.2f profit=$%.2f reason=%s",
+                pos_id, close_p, profit + commission + swap, close_reason_str);
+    ReportClosed(pos_id, status, close_p, profit + commission + swap, close_reason_str);
 }
 
 // ============================================================================
@@ -440,7 +491,7 @@ bool HttpPost(string url, string body)
 
 void SendHeartbeat(bool is_paused)
 {
-    // v0.2.1 (2026-05-07): added account_leverage so /portfolio panel shows
+    // v0.2.2 (2026-05-07): added account_leverage so /portfolio panel shows
     // dynamic leverage matching Exness setting (e.g. 1:500, 1:1000, 1:Unlimited)
     // instead of hardcoded "1:Unlimited" label. Backend graceful fallback if
     // migration 012 not yet applied -- field dropped, payload still accepted.
@@ -497,6 +548,20 @@ void ReportRejected(long signal_id, string reason)
     string body = StringFormat(
         "{\"signal_id\":%I64d,\"ea_instance_id\":\"%s\",\"mt5_account_login\":%I64d,\"status\":\"REJECTED\",\"execution_lot\":0,\"rejected_reason\":\"%s\"}",
         signal_id, EaInstanceId, AccountInfoInteger(ACCOUNT_LOGIN), reason
+    );
+    HttpPost(ApiBaseUrl + "/api/ea/report", body);
+}
+
+// v0.2.2 2026-05-07: report close-by-ticket. Server (execution_api.py) looks
+// up signal_id from rcs_executions WHERE mt5_ticket_id = ticket and updates
+// the existing OPEN row. Eliminates stuck-OPEN orphans.
+void ReportClosed(ulong ticket, string status, double close_price, double pnl_money, string close_reason)
+{
+    string body = StringFormat(
+        "{\"mt5_ticket_id\":%I64u,\"ea_instance_id\":\"%s\",\"mt5_account_login\":%I64d,\"status\":\"%s\",\"execution_lot\":0,\"close_price\":%.2f,\"pnl_money\":%.4f,\"close_reason\":\"%s\",\"closed_at\":\"%s\"}",
+        ticket, EaInstanceId, AccountInfoInteger(ACCOUNT_LOGIN),
+        status, close_price, pnl_money, close_reason,
+        TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS)
     );
     HttpPost(ApiBaseUrl + "/api/ea/report", body);
 }
