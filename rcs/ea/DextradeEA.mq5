@@ -135,7 +135,7 @@ int GetSlModifiedFlag(ulong ticket)
 // ============================================================================
 int OnInit()
 {
-    Print("[DextradeEA] v0.3.0 init (pip-aware sizing, BEP/trail granular close_reason, realized risk_pct)");
+    Print("[DextradeEA] v0.3.1 init (R:R preserve on slippage + heartbeat retry + close-report retry)");
     SetSafeDefaults();
     PollConfig();   // initial fetch
 
@@ -394,15 +394,57 @@ void OnTimer()
 
     ulong  ticket    = trade.ResultOrder();
     double fill      = trade.ResultPrice();
-    // v0.3.0: slippage = |fill - signal_entry| (was |fill - price_now| which
-    // always returned ~0 because price_now was just-fetched microseconds ago).
-    // Real slippage observed in prod: trade #2309 fill 4749.81 vs entry 4742.25
-    // = $7.56 slippage but reported "slip=0". Now reflects truth so
-    // /portfolio can flag high-slip trades.
     int    slippage  = (int)MathRound(MathAbs(fill - entry) / SymbolInfoDouble(_Symbol, SYMBOL_POINT));
 
-    PrintFormat("[DextradeEA] LIVE OPEN ticket=%I64u fill=%.2f signal_entry=%.2f slip=%dpts signal=%I64d",
-                ticket, fill, entry, slippage, signal_id);
+    // v0.3.1 (2026-05-07): R:R PRESERVATION ON SLIPPAGE.
+    // CRITICAL BUG seen in prod trade #20: signal entry 4745.19, SL 4739.35
+    // (distance 5.84), TP1 4750.06 (distance 4.87) = R:R 0.83. Broker filled
+    // at 4749.72 ($4.53 slippage above entry). EA submitted absolute SL/TP
+    // unchanged → effective SL distance from fill = 10.37, TP distance = 0.34.
+    // Result: 1:30 backwards R:R, certain loss.
+    //
+    // Fix: after fill, recompute SL/TP RELATIVE to fill price using signal's
+    // original distances. PositionModify to align with fill.
+    double signal_sl_dist  = MathAbs(entry - sl);
+    double signal_tp_dist  = MathAbs(tp1 - entry);
+    double new_sl, new_tp;
+    if(direction == "LONG")
+    {
+        new_sl = fill - signal_sl_dist;
+        new_tp = fill + signal_tp_dist;
+    }
+    else
+    {
+        new_sl = fill + signal_sl_dist;
+        new_tp = fill - signal_tp_dist;
+    }
+    int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+    new_sl = NormalizeDouble(new_sl, digits);
+    new_tp = NormalizeDouble(new_tp, digits);
+
+    bool rr_adjusted = false;
+    if(slippage > 100)  // > 0.1 USD slippage on XAUUSD warrants R:R reset
+    {
+        if(trade.PositionModify(ticket, new_sl, new_tp))
+        {
+            rr_adjusted = true;
+            PrintFormat("[DextradeEA] R:R adjusted to fill ticket=%I64u "
+                        "sl=%.2f→%.2f tp=%.2f→%.2f (preserve %.2f:%.2f ratio)",
+                        ticket, sl, new_sl, tp1, new_tp,
+                        signal_sl_dist, signal_tp_dist);
+            sl  = new_sl;
+            tp1 = new_tp;
+        }
+        else
+        {
+            PrintFormat("[DextradeEA] R:R modify FAILED ret=%d (%s) — keeping original SL/TP",
+                        trade.ResultRetcode(), trade.ResultRetcodeDescription());
+        }
+    }
+
+    PrintFormat("[DextradeEA] LIVE OPEN ticket=%I64u fill=%.2f signal_entry=%.2f slip=%dpts %s signal=%I64d",
+                ticket, fill, entry, slippage,
+                rr_adjusted ? "RR-ADJUSTED" : "RR-INTACT", signal_id);
     ReportLiveOpened(signal_id, ticket, fill, lot, sl, tp1, slippage);
 }
 
