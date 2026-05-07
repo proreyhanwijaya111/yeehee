@@ -8,7 +8,10 @@ import {
 
 export const runtime = 'edge'
 
-// 2026-05-07 self-host pivot: restore 60s ISR. No quota cap on PC rumah.
+// 2026-05-07 self-host: 60s ISR. Balanced — fresh enough for gold (daemon
+// cadence ~3min so 60s catches every cycle), and respectful of Supabase
+// reads (free tier IO). Manual refresh + on-focus client revalidation
+// triggers router.refresh() on demand for instant fresh.
 export const revalidate = 60
 
 export default async function HomePage() {

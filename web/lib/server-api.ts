@@ -32,10 +32,10 @@ const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
                  || ''
 const KEY = SERVICE_KEY || ANON_KEY
 
-// Cache TTL — 2026-05-07 self-host pivot via Cloudflare Tunnel: zero quota
-// constraint, restore aggressive 60s cache. Daemon push cadence ~3min, so
-// 60s catches every fresh bundle within ~1 cycle. Manual refresh button
-// triggers router.refresh() to bypass this cache entirely.
+// Cache TTL — 2026-05-07 self-host: 60s. Daemon cadence ~3min so 60s catches
+// every cycle. Lower TTLs hammer Supabase free-tier IO (each page = 6+ REST
+// queries). On-focus + manual refresh triggers router.refresh() bypass
+// for explicit fresh-now UX.
 const REVALIDATE_S = 60
 
 export async function supabaseGet<T = unknown>(path: string, opts?: { revalidate?: number }): Promise<T | null> {

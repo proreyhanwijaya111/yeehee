@@ -450,6 +450,19 @@ def run_once(store: SettingsStore, settings: dict, log=print, trigger_reason: st
             log(f"[tracker] update phase error: {e!r}")
             traceback.print_exc()
 
+        # ── Orphan execution sweeper ──────────────────────────────────────
+        # Reconciles rcs_executions (broker trades) where status=OPEN > 5min
+        # but EA never sent close-report (silent HTTP fail). Queries MT5
+        # history_deals_get to find broker close + updates DB row.
+        # Runs every cycle; trivial Supabase load when zero orphans.
+        try:
+            from daemon.orphan_sweeper import sweep_orphans
+            sweep_result = sweep_orphans(store, log=log)
+            if sweep_result.get("reconciled", 0) > 0 or sweep_result.get("errors", 0) > 0:
+                log(f"[orphan_sweeper] {sweep_result}")
+        except Exception as e:
+            log(f"[orphan_sweeper] cycle error: {e!r}")
+
         # ── RCS outcome tracker: evaluate pending rcs_signals ─────────────
         # Marks TP1_HIT/TP2_HIT/SL_HIT/EXPIRED on any pending signals based
         # on price action since signal was generated. Critical for v0.2 ML

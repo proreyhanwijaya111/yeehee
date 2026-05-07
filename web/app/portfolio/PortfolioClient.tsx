@@ -103,6 +103,25 @@ export default function PortfolioClient({
   const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set())
   const router = useRouter()
 
+  // Refresh strategy: ZERO background polling (was 30s interval — over-burden
+  // Supabase free-tier IO). Only refresh when:
+  //   1. User returns to tab (visibilitychange → router.refresh once)
+  //   2. User clicks manual refresh button (handled separately)
+  // Server-side ISR (60s) ensures sub-1min stale ceiling between refreshes.
+  useEffect(() => {
+    let lastRefresh = Date.now()
+    const onVis = () => {
+      // Throttle: don't refresh if just refreshed <10s ago (prevents storm
+      // when user rapidly switches tabs).
+      if (document.visibilityState === 'visible' && Date.now() - lastRefresh > 10_000) {
+        lastRefresh = Date.now()
+        router.refresh()
+      }
+    }
+    document.addEventListener('visibilitychange', onVis)
+    return () => document.removeEventListener('visibilitychange', onVis)
+  }, [router])
+
   // Pick active dataset based on toggle
   const sourceOpen   = source === 'real' ? realOpen   : openTrades
   const sourceClosed = source === 'real' ? realClosed : closedTrades
@@ -314,10 +333,12 @@ export default function PortfolioClient({
             <div className="px-3.5 py-6 text-center">
               <Hourglass size={24} className="text-slate-500 mx-auto mb-2" />
               <p className="text-xs text-slate-400 font-medium">
-                {filter === 'all' ? 'Belum ada active trade' : `Belum ada active trade ${filter}`}
+                {filter === 'all' ? 'Tidak ada posisi terbuka' : `Tidak ada posisi ${filter} terbuka`}
               </p>
               <p className="text-[10px] text-slate-500 leading-relaxed mt-1 max-w-xs mx-auto">
-                Daemon auto-open saat signal LONG/SHORT confidence ≥ 0.5.
+                {source === 'real'
+                  ? 'EA standby. Auto-open saat signal LONG/SHORT confidence ≥ 65% & broker accept.'
+                  : 'Paper sim auto-open setiap signal LONG/SHORT (no broker constraint).'}
               </p>
             </div>
           </Group>
@@ -373,9 +394,12 @@ function EaStatusCard({
   const lotEstimate = (riskUSD != null) ? riskUSD / (slDistanceUSD * 100) : null
 
   const heartbeatAge = heartbeat?.ts ? Math.floor((Date.now() - new Date(heartbeat.ts).getTime()) / 1000) : null
-  // Tightened from 300s -> 120s per user audit 2026-05-07: 5min too lenient,
-  // 2min matches EA heartbeat cadence (every 60s) + 1 grace cycle.
-  const heartbeatStale = heartbeatAge == null || heartbeatAge > 120
+  // 2026-05-07 v2: 180s threshold (was 120). Real EA heartbeat cadence drifts
+  // 60-90s due to OnTimer alignment. 120s threshold caused false OFFLINE
+  // alarms when EA was actually alive but heartbeat just landed late. 180s =
+  // 3 cycle grace, aligns with ISR 60s cache potentially serving heartbeat
+  // already 60s old at fetch time.
+  const heartbeatStale = heartbeatAge == null || heartbeatAge > 180
   const eaOnline = !!heartbeat && !heartbeatStale && !heartbeat.is_paused
 
   // Two-axis state: config (intent) vs runtime (actual). User audit 2026-05-07:
@@ -709,9 +733,10 @@ function TradeRow({ trade, live, xauPrice, onRefresh, onClosedOptimistically }: 
   onRefresh?: () => void;
   onClosedOptimistically?: (tradeId: string) => void;
 }) {
-  // Default-expanded for OPEN trades (user wants live tracking visible),
-  // collapsed for closed trades (history scan-friendly, tap to expand chart).
-  const [expanded, setExpanded] = useState(Boolean(live))
+  // 2026-05-07 mobile compact: default-COLLAPSED for both live and closed —
+  // user found embedded chart on every OPEN trade made portfolio tab too tall.
+  // Tap-to-expand keeps row scannable, chart on demand.
+  const [expanded, setExpanded] = useState(false)
   const [closing, setClosing]   = useState(false)
 
   const handleManualClose = async (e: React.MouseEvent) => {
@@ -773,8 +798,8 @@ function TradeRow({ trade, live, xauPrice, onRefresh, onClosedOptimistically }: 
 
   return (
     <div
-      className={cn('px-3.5 py-3', !live && 'cursor-pointer hover:bg-slate-800/30 transition-colors')}
-      onClick={live ? undefined : () => setExpanded(v => !v)}
+      className="px-3.5 py-3 cursor-pointer hover:bg-slate-800/30 transition-colors"
+      onClick={() => setExpanded(v => !v)}
     >
       <div className="flex items-center gap-2.5">
         <div className="w-7 h-7 rounded-lg bg-slate-900/50 border border-slate-700/50 flex items-center justify-center shrink-0">
@@ -863,12 +888,12 @@ function TradeRow({ trade, live, xauPrice, onRefresh, onClosedOptimistically }: 
         </span>
       </div>
 
-      {/* Time-series chart — only when expanded. Live trades default expanded;
-          closed trades default collapsed (tap row to expand). */}
+      {/* Time-series chart — only when expanded. Both live and closed default
+          collapsed for compact mobile layout. Tap row anywhere to toggle. */}
       {expanded && (
         <TradeChart trade={trade} live={live} xauPrice={xauPrice ?? null} />
       )}
-      {!live && !expanded && (
+      {!expanded && (
         <p className="mt-1 text-[9px] text-slate-600 text-center">tap untuk lihat chart</p>
       )}
     </div>

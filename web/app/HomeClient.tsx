@@ -32,16 +32,17 @@ export default function HomeClient({
   const [isRefreshing, setIsRefreshing] = useState(false)
 
   // SWR with fallbackData = no loading flash. Hydrates from server-rendered HTML.
-  // 2026-05-07 self-host pivot: 60s SWR (no Vercel cap). Manual refresh button
-  // forces both SWR mutate + router.refresh() to bust SSR ISR cache.
+  // 2026-05-07 self-host: ZERO background polling (Supabase budget). Only
+  // refresh on tab focus + manual button. Daemon cadence ~3min + ISR 60s
+  // means worst-case stale = ~4min while idle, instant fresh on user return.
   const { data, error, mutate } = useSWR(
     'signals',
     () => getSignals('signals'),
     {
       fallbackData:        initialBundle ?? undefined,
-      refreshInterval:     60 * 1000,
-      revalidateOnFocus:   false,
-      revalidateOnMount:   !initialBundle,  // only fetch on mount if no SSR data
+      refreshInterval:     0,            // disabled — on-focus only
+      revalidateOnFocus:   true,         // refresh when user returns to tab
+      revalidateOnMount:   !initialBundle,
     },
   )
 

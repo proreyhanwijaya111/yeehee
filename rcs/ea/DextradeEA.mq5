@@ -276,8 +276,11 @@ void OnTimer()
         return;
     }
 
-    // Heartbeat every 60s
-    if(TimeCurrent() - g_last_heartbeat > 60)
+    // Heartbeat — fire when ≥45s since last (was 60). OnTimer fires at
+    // PollIntervalSec; 60s threshold + timer drift can cause 90-100s gaps,
+    // which UI sometimes displayed as OFFLINE due to ISR cache compounding.
+    // 45s threshold ensures heartbeat sent every ~60s wall-clock.
+    if(TimeCurrent() - g_last_heartbeat >= 45)
     {
         SendHeartbeat(false);
         g_last_heartbeat = TimeCurrent();
@@ -384,10 +387,15 @@ void OnTimer()
 
     ulong  ticket    = trade.ResultOrder();
     double fill      = trade.ResultPrice();
-    int    slippage  = (int)MathRound(MathAbs(fill - price_now) / SymbolInfoDouble(_Symbol, SYMBOL_POINT));
+    // v0.3.0: slippage = |fill - signal_entry| (was |fill - price_now| which
+    // always returned ~0 because price_now was just-fetched microseconds ago).
+    // Real slippage observed in prod: trade #2309 fill 4749.81 vs entry 4742.25
+    // = $7.56 slippage but reported "slip=0". Now reflects truth so
+    // /portfolio can flag high-slip trades.
+    int    slippage  = (int)MathRound(MathAbs(fill - entry) / SymbolInfoDouble(_Symbol, SYMBOL_POINT));
 
-    PrintFormat("[DextradeEA] LIVE OPEN ticket=%I64u fill=%.2f slip=%d signal=%I64d",
-                ticket, fill, slippage, signal_id);
+    PrintFormat("[DextradeEA] LIVE OPEN ticket=%I64u fill=%.2f signal_entry=%.2f slip=%dpts signal=%I64d",
+                ticket, fill, entry, slippage, signal_id);
     ReportLiveOpened(signal_id, ticket, fill, lot, sl, tp1, slippage);
 }
 
@@ -604,6 +612,27 @@ bool HttpPost(string url, string body)
     return res != -1;
 }
 
+// HttpPost with retry: critical for close-report which previously failed
+// silently → orphan rcs_executions OPEN row → manual reconciliation needed.
+// 3 attempts, exponential backoff (0.5s, 1.5s, 4.5s) = total ≤6.5s wall-clock.
+bool HttpPostWithRetry(string url, string body, int max_attempts = 3)
+{
+    int delay_ms = 500;
+    for(int attempt = 1; attempt <= max_attempts; attempt++)
+    {
+        if(HttpPost(url, body)) return true;
+        if(attempt < max_attempts)
+        {
+            PrintFormat("[DextradeEA] HttpPost retry %d/%d after %dms (last err=%d)",
+                        attempt, max_attempts, delay_ms, GetLastError());
+            Sleep(delay_ms);
+            delay_ms *= 3;
+        }
+    }
+    PrintFormat("[DextradeEA] HttpPost FAILED %d attempts: %s", max_attempts, url);
+    return false;
+}
+
 void SendHeartbeat(bool is_paused)
 {
     // v0.2.2 (2026-05-07): added account_leverage so /portfolio panel shows
@@ -682,7 +711,10 @@ void ReportClosed(ulong ticket, string status, double close_price, double pnl_mo
         status, close_price, pnl_money, close_reason,
         TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS)
     );
-    HttpPost(ApiBaseUrl + "/api/ea/report", body);
+    // 3-attempt retry — close-report is the most critical post. Silent fail
+    // here = orphan OPEN row in rcs_executions = phantom UI position until
+    // manual SQL reconciliation. Retry mitigates transient network/server blips.
+    HttpPostWithRetry(ApiBaseUrl + "/api/ea/report", body);
 }
 
 // ============================================================================

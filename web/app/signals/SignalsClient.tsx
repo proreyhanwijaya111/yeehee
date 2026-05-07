@@ -17,16 +17,15 @@ interface Props {
 }
 
 export default function SignalsClient({ initialBundle, serverError, openTrades = [] }: Props) {
-  // 2026-05-07 self-host pivot: 60s SWR (no Vercel cap). Cloudflare Tunnel
-  // routes /signals → PC rumah; daemon cycles 3min so 60s catches every
-  // fresh bundle within ≤1 cycle.
+  // 2026-05-07 self-host: ZERO background polling (Supabase budget).
+  // On-focus revalidation only — fresh immediately when user returns.
   const { data, error, mutate } = useSWR(
     'signals',
     () => getSignals('signals'),
     {
       fallbackData:      initialBundle ?? undefined,
-      refreshInterval:   60 * 1000,
-      revalidateOnFocus: false,
+      refreshInterval:   0,
+      revalidateOnFocus: true,
       revalidateOnMount: !initialBundle,
     },
   )

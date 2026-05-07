@@ -11,8 +11,8 @@ import {
 
 export const runtime = 'edge'
 
-// 2026-05-07 self-host pivot: restore 60s ISR. No quota cap. Manual refresh
-// button uses router.refresh() to bypass cache entirely.
+// 2026-05-07 self-host: 60s ISR. Balanced fresh-vs-Supabase-budget.
+// Manual refresh + on-focus revalidation triggers fresh fetches on demand.
 export const revalidate = 60
 
 export default async function PortfolioPage() {
