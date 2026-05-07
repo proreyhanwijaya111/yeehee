@@ -11,10 +11,9 @@ import {
 
 export const runtime = 'edge'
 
-// 2026-05-07: bumped 30s -> 180s. Vercel free tier exceeded (1.4M/1M
-// invocations, 5h51m/4h CPU). Daemon push cycle = 3min, so 180s revalidate
-// misses ≤1 cycle. Significant cost reduction.
-export const revalidate = 180
+// 2026-05-07 self-host pivot: restore 60s ISR. No quota cap. Manual refresh
+// button uses router.refresh() to bypass cache entirely.
+export const revalidate = 60
 
 export default async function PortfolioPage() {
   let openTrades: Awaited<ReturnType<typeof getActiveTrades>> = []

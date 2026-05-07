@@ -8,8 +8,8 @@ import {
 
 export const runtime = 'edge'
 
-// 2026-05-07: bumped 60s -> 180s. Vercel free tier cap exceeded.
-export const revalidate = 180
+// 2026-05-07 self-host pivot: restore 60s ISR. No quota cap on PC rumah.
+export const revalidate = 60
 
 export default async function HomePage() {
   let initialBundle = null

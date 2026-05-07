@@ -1,5 +1,7 @@
 'use client'
 import useSWR from 'swr'
+import { useRouter } from 'next/navigation'
+import { useState } from 'react'
 import { RefreshCw, Coins, Zap } from 'lucide-react'
 import { getSignals } from '@/lib/api'
 import HeroCard from '@/components/HeroCard'
@@ -26,25 +28,33 @@ interface Props {
 export default function HomeClient({
   initialBundle, serverError, openTrades = [], closedTrades = [], portfolioStats = null,
 }: Props) {
+  const router = useRouter()
+  const [isRefreshing, setIsRefreshing] = useState(false)
+
   // SWR with fallbackData = no loading flash. Hydrates from server-rendered HTML.
-  // 2026-05-07: bumped 60s -> 5min after Vercel free tier exceeded (1.4M/1M
-  // function invocations). Each SWR refresh = 5+ Supabase calls server-side.
-  // 5min interval × user count was burning the cap. Daemon cycles 3min, so
-  // 5min catches every other cycle on average. Acceptable trade.
+  // 2026-05-07 self-host pivot: 60s SWR (no Vercel cap). Manual refresh button
+  // forces both SWR mutate + router.refresh() to bust SSR ISR cache.
   const { data, error, mutate } = useSWR(
     'signals',
     () => getSignals('signals'),
     {
       fallbackData:        initialBundle ?? undefined,
-      refreshInterval:     5 * 60 * 1000,
+      refreshInterval:     60 * 1000,
       revalidateOnFocus:   false,
       revalidateOnMount:   !initialBundle,  // only fetch on mount if no SSR data
     },
   )
 
+  // Force refresh: clears in-memory API cache + triggers fresh SWR fetch +
+  // calls router.refresh() to re-run Server Component (bypasses revalidate ISR).
   const handleRefresh = async () => {
-    await clearApiCache()
-    await mutate()
+    setIsRefreshing(true)
+    try {
+      await clearApiCache()
+      await Promise.all([mutate(), Promise.resolve(router.refresh())])
+    } finally {
+      setIsRefreshing(false)
+    }
   }
 
   // No data: server fetched nothing, show error UI server-rendered
@@ -81,10 +91,11 @@ export default function HomeClient({
         </div>
         <button
           onClick={handleRefresh}
-          className="p-2 rounded-lg bg-slate-800/60 border border-slate-700/50 hover:bg-slate-800 transition-colors touch-action active:scale-95"
+          disabled={isRefreshing}
+          className="p-2 rounded-lg bg-slate-800/60 border border-slate-700/50 hover:bg-slate-800 transition-colors touch-action active:scale-95 disabled:opacity-50"
           aria-label="Refresh"
         >
-          <RefreshCw size={14} className="text-slate-400" />
+          <RefreshCw size={14} className={`text-slate-400 ${isRefreshing ? 'animate-spin' : ''}`} />
         </button>
       </header>
 

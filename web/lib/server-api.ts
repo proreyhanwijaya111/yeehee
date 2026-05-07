@@ -32,10 +32,11 @@ const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
                  || ''
 const KEY = SERVICE_KEY || ANON_KEY
 
-// Cache TTL — 2026-05-07 bumped 60s -> 180s after Vercel free tier exceeded.
-// 180s = 3min matches daemon push cadence. Reduces Supabase REST calls per
-// page load by ~3x without losing significant freshness.
-const REVALIDATE_S = 180
+// Cache TTL — 2026-05-07 self-host pivot via Cloudflare Tunnel: zero quota
+// constraint, restore aggressive 60s cache. Daemon push cadence ~3min, so
+// 60s catches every fresh bundle within ~1 cycle. Manual refresh button
+// triggers router.refresh() to bypass this cache entirely.
+const REVALIDATE_S = 60
 
 export async function supabaseGet<T = unknown>(path: string, opts?: { revalidate?: number }): Promise<T | null> {
   if (!URL || !KEY) return null
