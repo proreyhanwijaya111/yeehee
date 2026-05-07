@@ -622,6 +622,55 @@ def _evaluate_trade(trade: dict, df_5m: pd.DataFrame, now: datetime) -> Optional
     if closed_in_bar:
         return upd
 
+    # CRITICAL FINAL GUARD (added 2026-05-07): if stored extremes already
+    # violated cur_sl but candle iteration missed it (e.g. no new 5m bar since
+    # last_check_at, OR augmented high/low from latest_bar exceed iterated
+    # extremes), close at trailing SL using cur_sl as exit price.
+    #
+    # ROOT CAUSE: the latest-bar augmentation block (above, at line ~510)
+    # updates upd.high_after_open / upd.low_after_open and flags TP hits, but
+    # does NOT check against cur_sl. The candle iteration loop checks SL only
+    # for bars in `candles` (df_5m since last_check_at) — empty between cycles
+    # when daemon polls faster than yfinance new-bar cadence.
+    #
+    # Without this guard: SL hits silently miss until trade expires, exiting
+    # at last_close (often far worse than the SL level). User-reported bug
+    # 2026-05-07: Active LONG a0f673a6 with trailing sl=$4703.12 +
+    # low_after_open=$4694.20 stayed OPEN; History SHORT 0c7476eb with
+    # sl=$4691.90 + high_after_open=$4711.30 expired at -3.01% instead of -1R.
+    if side == "LONG" and upd.low_after_open is not None and upd.low_after_open <= cur_sl:
+        upd.closed = True
+        upd.status = "SL"
+        upd.exit_price = cur_sl
+        if cur_sl <= original_sl:
+            upd.exit_reason = "sl_hit"
+        elif abs(cur_sl - entry) < 1e-6:
+            upd.exit_reason = "bep_hit"
+        else:
+            upd.exit_reason = "trailing_sl_hit"
+        upd.closed_at = now.isoformat()
+        upd.pnl_r = _r(cur_sl)
+        upd.pnl_pct = round((cur_sl - entry) / entry * 100, 4)
+        upd.hit_sl = (cur_sl <= original_sl)
+        upd.sl_new = cur_sl if cur_sl != sl else None
+        return upd
+    if side == "SHORT" and upd.high_after_open is not None and upd.high_after_open >= cur_sl:
+        upd.closed = True
+        upd.status = "SL"
+        upd.exit_price = cur_sl
+        if cur_sl >= original_sl:
+            upd.exit_reason = "sl_hit"
+        elif abs(cur_sl - entry) < 1e-6:
+            upd.exit_reason = "bep_hit"
+        else:
+            upd.exit_reason = "trailing_sl_hit"
+        upd.closed_at = now.isoformat()
+        upd.pnl_r = _r(cur_sl)
+        upd.pnl_pct = round((entry - cur_sl) / entry * 100, 4)
+        upd.hit_sl = (cur_sl >= original_sl)
+        upd.sl_new = cur_sl if cur_sl != sl else None
+        return upd
+
     # Not closed by SL/TP — check expiry
     expiry_dt = pd.Timestamp(trade["expiry_at"])
     if now >= expiry_dt:
