@@ -27,15 +27,16 @@ export default function HomeClient({
   initialBundle, serverError, openTrades = [], closedTrades = [], portfolioStats = null,
 }: Props) {
   // SWR with fallbackData = no loading flash. Hydrates from server-rendered HTML.
-  // 2026-05-06: tightened refresh from 5min -> 60s. Daemon pushes ~3min cycles,
-  // so 60s catches new bundles within 1-2x cycle. Old 5min interval meant
-  // "5m lalu" stayed visible for 8+ minutes after a new bundle landed in DB.
+  // 2026-05-07: bumped 60s -> 5min after Vercel free tier exceeded (1.4M/1M
+  // function invocations). Each SWR refresh = 5+ Supabase calls server-side.
+  // 5min interval × user count was burning the cap. Daemon cycles 3min, so
+  // 5min catches every other cycle on average. Acceptable trade.
   const { data, error, mutate } = useSWR(
     'signals',
     () => getSignals('signals'),
     {
       fallbackData:        initialBundle ?? undefined,
-      refreshInterval:     60 * 1000,
+      refreshInterval:     5 * 60 * 1000,
       revalidateOnFocus:   false,
       revalidateOnMount:   !initialBundle,  // only fetch on mount if no SSR data
     },

@@ -17,15 +17,16 @@ interface Props {
 }
 
 export default function SignalsClient({ initialBundle, serverError, openTrades = [] }: Props) {
-  // 60s SWR refresh (was 5min) — daemon push cycles every ~3min, so this
-  // catches new bundles within 1-2x cycle. Keeps signal countdown / EXPIRED
-  // state aligned with actual daemon output.
+  // 2026-05-07: 5min refresh (was 60s) — Vercel free tier exceeded by tighter
+  // refresh schedule. Each SWR fetch hits Supabase REST + Vercel function.
+  // Daemon push 3min, so 5min catches every other cycle. Trade staleness for
+  // not blowing through 1M function invocations cap.
   const { data, error, mutate } = useSWR(
     'signals',
     () => getSignals('signals'),
     {
       fallbackData:      initialBundle ?? undefined,
-      refreshInterval:   60 * 1000,
+      refreshInterval:   5 * 60 * 1000,
       revalidateOnFocus: false,
       revalidateOnMount: !initialBundle,
     },

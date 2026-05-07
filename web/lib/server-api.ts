@@ -32,9 +32,10 @@ const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
                  || ''
 const KEY = SERVICE_KEY || ANON_KEY
 
-// Cache TTL — 60s match daemon refresh cadence (default 5min)
-// pakai 60s biar UI punya freshness window kalau user reload cepat
-const REVALIDATE_S = 60
+// Cache TTL — 2026-05-07 bumped 60s -> 180s after Vercel free tier exceeded.
+// 180s = 3min matches daemon push cadence. Reduces Supabase REST calls per
+// page load by ~3x without losing significant freshness.
+const REVALIDATE_S = 180
 
 export async function supabaseGet<T = unknown>(path: string, opts?: { revalidate?: number }): Promise<T | null> {
   if (!URL || !KEY) return null

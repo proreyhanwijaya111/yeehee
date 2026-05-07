@@ -9,7 +9,10 @@ import {
   getEaHeartbeat, getEaConfig, getRealEaTrades,
 } from '@/lib/server-api'
 
-export const revalidate = 30
+// 2026-05-07: bumped 30s -> 180s. Vercel free tier exceeded (1.4M/1M
+// invocations, 5h51m/4h CPU). Daemon push cycle = 3min, so 180s revalidate
+// misses ≤1 cycle. Significant cost reduction.
+export const revalidate = 180
 
 export default async function PortfolioPage() {
   let openTrades: Awaited<ReturnType<typeof getActiveTrades>> = []
