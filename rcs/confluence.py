@@ -40,6 +40,59 @@ class EaDecision:
     reason:       str           # short human-readable reason
 
 
+def is_position_active(store, log=print) -> tuple[bool, str]:
+    """Single-position policy gate (user spec 2026-05-07): block new EA promotions
+    while there's an active execution OR a fresh pending-pickup signal.
+
+    Reason: user requirement "cuma boleh 1 order... sinyal lain selama durasi
+    open posisi tahan jangan execute". Without this gate, multiple signals
+    queue in PENDING_PICKUP. EA's `max_open_positions=1` blocks the 2nd execution
+    but stale signals stay queued; when first position closes, the OLDEST stale
+    signal fires at outdated entry.
+
+    Check (returns True if any matches):
+      a) rcs_executions.status IN ('OPEN', 'PENDING_BROKER') — real EA position
+      b) rcs_signals.execution_status IN ('PENDING_PICKUP', 'PICKED_UP') AND
+         generated_at >= now-180s — fresh queue. Stale ones get expired by the
+         /api/ea/next-signal sweeper anyway.
+
+    Fail-open: if check errors (DB issue), return (False, ...) so promotion
+    proceeds. EA's own max_open_positions still defends.
+    """
+    if not store or not getattr(store, "has_db", False):
+        return (False, "no_db")
+    try:
+        # Check open executions
+        r = (
+            store._client.from_("rcs_executions")
+            .select("id,status")
+            .in_("status", ["OPEN", "PENDING_BROKER"])
+            .limit(1)
+            .execute()
+        )
+        if r.data:
+            return (True, f"open_execution_id={r.data[0]['id']}_status={r.data[0]['status']}")
+
+        # Check pending signal queue (only fresh — within 180s window)
+        from datetime import datetime, timezone, timedelta
+        cutoff = (datetime.now(timezone.utc) - timedelta(seconds=180)).isoformat()
+        r = (
+            store._client.from_("rcs_signals")
+            .select("id,execution_status,generated_at")
+            .in_("execution_status", ["PENDING_PICKUP", "PICKED_UP"])
+            .gte("generated_at", cutoff)
+            .limit(1)
+            .execute()
+        )
+        if r.data:
+            row = r.data[0]
+            return (True, f"pending_signal_id={row['id']}_status={row['execution_status']}")
+    except Exception as e:
+        log(f"[ea] is_position_active check failed: {e}")
+        return (False, f"check_error_{type(e).__name__}")
+    return (False, "no_active")
+
+
 def evaluate_for_ea(
     style: str,
     style_signal: dict,
@@ -81,9 +134,15 @@ def promote_signal_for_ea(
     if not store or not getattr(store, "has_db", False) or not rcs_signal_id:
         return False
     try:
+        # CRITICAL (2026-05-07): UPDATE `direction` to match strategy decision.
+        # Without this, rcs_signals.direction stays as RCS indicator direction
+        # (e.g. WAIT) while is_executable=true. EA reads direction from this
+        # row -> would try execute WAIT signal at unknown side. Bug discovered
+        # when /api/ea/next-signal returned id=2053 direction=WAIT conf=15%.
         store._client.from_("rcs_signals").update({
             "is_executable":    True,
             "execution_status": "PENDING_PICKUP",
+            "direction":        decision.side,    # LONG or SHORT (gated upstream)
         }).eq("id", rcs_signal_id).execute()
         log(f"[ea] PROMOTE #{rcs_signal_id} {decision.style} {decision.side} conf={decision.confidence:.2f}")
         return True

@@ -199,12 +199,15 @@ def get_spot():
 
 @app.get("/api/ea/next-signal")
 def get_next_signal(ea: str = Query(..., description="EA instance ID")):
-    """EA polling endpoint. Returns oldest PENDING_PICKUP signal + claims it.
+    """EA polling endpoint. Returns FRESH PENDING_PICKUP signal + claims it.
 
     Behavior:
-      - Query rcs_signals WHERE execution_status='PENDING_PICKUP' AND is_executable=true
-      - Pick oldest, mark as PICKED_UP atomically
-      - Return signal payload with all order fields
+      1. SWEEP stale signals: PENDING_PICKUP older than 180s -> EXPIRED.
+         Prevents executing outdated entry levels (user spec 2026-05-07).
+      2. Query rcs_signals WHERE execution_status='PENDING_PICKUP' AND is_executable=true
+         AND generated_at >= now-180s
+      3. Pick oldest fresh, mark as PICKED_UP atomically
+      4. Return signal payload with all order fields
 
     EA must call /api/ea/report after attempting execution (success or fail).
     """
@@ -213,11 +216,34 @@ def get_next_signal(ea: str = Query(..., description="EA instance ID")):
         raise HTTPException(503, "Supabase not configured")
 
     try:
+        # 1. Stale sweeper: any PENDING_PICKUP older than 180s -> EXPIRED.
+        # Without this, after a position closes the EA picks up a stale
+        # signal at outdated entry. User spec: queue is fresh-only.
+        from datetime import timedelta as _td
+        stale_cutoff = (datetime.now(timezone.utc) - _td(seconds=180)).isoformat()
+        try:
+            sweep = (
+                supa.from_("rcs_signals")
+                .update({"execution_status": "EXPIRED"})
+                .eq("execution_status", "PENDING_PICKUP")
+                .lt("generated_at", stale_cutoff)
+                .execute()
+            )
+            # don't fail-loud if sweep returns empty / errors — best-effort
+        except Exception:
+            pass
+
+        # 2. Claim oldest FRESH (within 180s) pending DIRECTIONAL signal.
+        # Defense-in-depth: even if promote_signal_for_ea forgot to update
+        # direction (legacy bug fixed 2026-05-07), reject WAIT signals here.
+        # EA must NEVER execute a WAIT-direction signal — it's ambiguous.
         r = (
             supa.from_("rcs_signals")
             .select("*")
             .eq("execution_status", "PENDING_PICKUP")
             .eq("is_executable", True)
+            .in_("direction", ["LONG", "SHORT"])
+            .gte("generated_at", stale_cutoff)
             .order("generated_at", desc=False)
             .limit(1)
             .execute()
@@ -380,11 +406,22 @@ def get_ea_config(ea: str = Query(..., description="EA instance ID")):
 
         max_trades_per_day = int(row.get("ea_max_trades_per_day") or 5)
 
+        # NOTE: do NOT use `bool(x or default)` for fields where True is the
+        # safe default — Python `False or True = True` flips a user's explicit
+        # False back to True. Use `dict.get(key, default)` directly so stored
+        # False is honored. Discovered 2026-05-07: ea_enable_paper stayed True
+        # in API response after user PATCH set it to False.
+        def _bool(field, default):
+            v = row.get(field)
+            if v is None:
+                return default
+            return bool(v)
+
         return {
             "ea_instance_id":      ea,
             # Safety flags
-            "enable_execution":    bool(row.get("ea_enable_execution") or False),
-            "enable_paper":        bool(row.get("ea_enable_paper") or True),
+            "enable_execution":    _bool("ea_enable_execution", False),
+            "enable_paper":        _bool("ea_enable_paper", True),
             # Limits
             "max_open_positions":  int(row.get("ea_max_open_positions") or 1),
             "max_trades_per_day":  max_trades_per_day,
@@ -395,11 +432,11 @@ def get_ea_config(ea: str = Query(..., description="EA instance ID")):
             # Risk per trade
             "risk_per_trade_pct":  float(row.get("ea_risk_per_trade_pct") or 1.0),
             # Break-even
-            "enable_break_even":         bool(row.get("ea_enable_break_even", True)),
+            "enable_break_even":         _bool("ea_enable_break_even", True),
             "break_even_trigger_pips":   int(row.get("ea_break_even_trigger_pips") or 50),
             "break_even_lock_pips":      int(row.get("ea_break_even_lock_pips") or 5),
             # Trailing stop
-            "enable_trailing":           bool(row.get("ea_enable_trailing", True)),
+            "enable_trailing":           _bool("ea_enable_trailing", True),
             "trailing_trigger_pips":     int(row.get("ea_trailing_trigger_pips") or 100),
             "trailing_distance_pips":    int(row.get("ea_trailing_distance_pips") or 30),
             "received_at":               datetime.now(timezone.utc).isoformat(),

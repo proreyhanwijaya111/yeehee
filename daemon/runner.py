@@ -28,7 +28,7 @@ try:
     from rcs.composite import compute_rcs
     from rcs.persistence import push_rcs_signal
     from rcs.outcome_tracker import evaluate_pending_signals as rcs_evaluate_outcomes
-    from rcs.confluence import evaluate_for_ea, promote_signal_for_ea, DEFAULT_MIN_CONFIDENCE
+    from rcs.confluence import evaluate_for_ea, promote_signal_for_ea, is_position_active, DEFAULT_MIN_CONFIDENCE
     RCS_AVAILABLE = True
 except ImportError:
     RCS_AVAILABLE = False
@@ -383,34 +383,46 @@ def run_once(store: SettingsStore, settings: dict, log=print, trigger_reason: st
             except Exception as e:
                 log(f"[rcs] push_rcs_signal failed: {e!r}")
 
-            # ── EA gate (Opsi A): per-style direct check, no multi-source agree ──
-            # Single rule: if strategy says LONG/SHORT with conf ≥ threshold, promote.
-            # RCS becomes display-only reference. 12-agent debate informs UI but
-            # doesn't block per-style EA execution (debate already aggregated 12
-            # specialists; layering more filters compounds away every signal).
+            # ── EA gate (Opsi A + single-position policy): ──
+            # User spec 2026-05-07: only 1 EA position at a time. If active
+            # execution OR fresh pending-pickup signal exists, skip ALL
+            # promotions this cycle. New signals still display in UI as info,
+            # but won't queue for EA pickup until current position closes.
             try:
-                ea_min_conf = float(settings.get("ea_min_confidence_pct") or 55) / 100.0
-                if ea_min_conf <= 0:
-                    ea_min_conf = DEFAULT_MIN_CONFIDENCE
-                for style_name, sig_obj in (
-                    ("scalper",  sig_scalper),
-                    ("intraday", sig_intraday),
-                    ("swing",    sig_swing),
-                ):
-                    decision = evaluate_for_ea(
-                        style=style_name,
-                        style_signal=sig_obj.to_dict(),
-                        min_confidence=ea_min_conf,
-                    )
-                    if decision.is_executable:
-                        rcs_id = rcs_ids_per_style.get(style_name)
-                        if rcs_id:
-                            promote_signal_for_ea(store, rcs_id, decision, log=log)
-                        else:
-                            log(f"[ea] {style_name} eligible but no rcs_id — skip")
-                    elif decision.side in ("LONG", "SHORT"):
-                        # Only log directional rejections — FLAT is silent (already shown above)
-                        log(f"[ea] {style_name} {decision.side} not promoted: {decision.reason}")
+                position_active, reason = is_position_active(store, log=log)
+                if position_active:
+                    log(f"[ea] PROMOTE SKIPPED (single-position policy): {reason}")
+                else:
+                    ea_min_conf = float(settings.get("ea_min_confidence_pct") or 55) / 100.0
+                    if ea_min_conf <= 0:
+                        ea_min_conf = DEFAULT_MIN_CONFIDENCE
+                    promoted_in_cycle = False
+                    for style_name, sig_obj in (
+                        ("scalper",  sig_scalper),
+                        ("intraday", sig_intraday),
+                        ("swing",    sig_swing),
+                    ):
+                        # Re-check after first promotion in same cycle to avoid
+                        # promoting 2 styles back-to-back when both qualify.
+                        if promoted_in_cycle:
+                            log(f"[ea] {style_name} skipped — already promoted this cycle")
+                            continue
+                        decision = evaluate_for_ea(
+                            style=style_name,
+                            style_signal=sig_obj.to_dict(),
+                            min_confidence=ea_min_conf,
+                        )
+                        if decision.is_executable:
+                            rcs_id = rcs_ids_per_style.get(style_name)
+                            if rcs_id:
+                                ok = promote_signal_for_ea(store, rcs_id, decision, log=log)
+                                if ok:
+                                    promoted_in_cycle = True
+                            else:
+                                log(f"[ea] {style_name} eligible but no rcs_id — skip")
+                        elif decision.side in ("LONG", "SHORT"):
+                            # Only log directional rejections — FLAT is silent (already shown above)
+                            log(f"[ea] {style_name} {decision.side} not promoted: {decision.reason}")
             except Exception as e:
                 log(f"[ea] gate error: {e!r}")
     else:
