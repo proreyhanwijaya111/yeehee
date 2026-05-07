@@ -68,12 +68,16 @@ void SetSafeDefaults()
     g_config.daily_loss_pct          = 5.0;
     g_config.min_confidence_pct      = 65;
     g_config.risk_per_trade_pct      = 1.0;
+    // v0.3.0: defaults sized for XAUUSD with corrected pip = 10×_Point = 0.01.
+    // Old defaults (50/5/100/30) were misinterpreted by EA using raw _Point
+    // (0.001), making BEP fire at $0.05 profit and trail at $0.10 with $0.03
+    // distance — killed every trade in <10s. New defaults assume pip = $0.01:
     g_config.enable_break_even       = true;
-    g_config.break_even_trigger_pips = 50;
-    g_config.break_even_lock_pips    = 5;
+    g_config.break_even_trigger_pips = 200;     // 200 × $0.01 = +$2.00 profit triggers BEP
+    g_config.break_even_lock_pips    = 50;      // lock SL +$0.50 above entry
     g_config.enable_trailing         = true;
-    g_config.trailing_trigger_pips   = 100;
-    g_config.trailing_distance_pips  = 30;
+    g_config.trailing_trigger_pips   = 500;     // trail starts at +$5.00 profit
+    g_config.trailing_distance_pips  = 200;     // trail with $2.00 distance
 }
 
 // ============================================================================
@@ -88,12 +92,44 @@ datetime g_last_config_poll      = 0;
 datetime g_last_spot_post        = 0;
 int      g_config_poll_interval  = 60;   // refresh API config every 60s
 
+// Track which tickets had SL modified after open. 0 = never modified (original SL),
+// 1 = BEP-arm move only, 2 = trailing move (any subsequent SL movement). Used by
+// OnTradeTransaction to label close_reason granularly: sl_hit / bep_hit / trailing_sl_hit.
+ulong   g_sl_modified_keys[];
+int     g_sl_modified_vals[];
+
+void SetSlModifiedFlag(ulong ticket, int flag)
+{
+    int n = ArraySize(g_sl_modified_keys);
+    for(int i = 0; i < n; i++)
+    {
+        if(g_sl_modified_keys[i] == ticket)
+        {
+            // Promote BEP -> TRAIL if multiple moves happen, never demote.
+            if(flag > g_sl_modified_vals[i]) g_sl_modified_vals[i] = flag;
+            return;
+        }
+    }
+    ArrayResize(g_sl_modified_keys, n + 1);
+    ArrayResize(g_sl_modified_vals, n + 1);
+    g_sl_modified_keys[n] = ticket;
+    g_sl_modified_vals[n] = flag;
+}
+
+int GetSlModifiedFlag(ulong ticket)
+{
+    int n = ArraySize(g_sl_modified_keys);
+    for(int i = 0; i < n; i++)
+        if(g_sl_modified_keys[i] == ticket) return g_sl_modified_vals[i];
+    return 0;  // never modified
+}
+
 // ============================================================================
 // INITIALIZATION
 // ============================================================================
 int OnInit()
 {
-    Print("[DextradeEA] v0.2.2 init");
+    Print("[DextradeEA] v0.3.0 init (pip-aware sizing, BEP/trail granular close_reason, realized risk_pct)");
     SetSafeDefaults();
     PollConfig();   // initial fetch
 
@@ -162,17 +198,30 @@ void OnTradeTransaction(const MqlTradeTransaction& trans,
     double swap       = HistoryDealGetDouble(trans.deal, DEAL_SWAP);
     long   reason     = HistoryDealGetInteger(trans.deal, DEAL_REASON);
 
-    // Map MT5 DEAL_REASON_* -> our schema status string
+    // Map MT5 DEAL_REASON_* -> our schema status string. SL hits promoted to
+    // bep_hit / trailing_sl_hit when SL was modified post-open (tracked in
+    // g_sl_modified_*). DEAL_REASON_SL alone is ambiguous — broker fires SL
+    // event regardless of whether SL was original or moved.
+    int sl_flag = GetSlModifiedFlag(pos_id);  // 0=never moved, 1=BEP, 2=trail
     string status, close_reason_str;
     switch((int)reason)
     {
         case DEAL_REASON_TP:        status = "CLOSED_TP";       close_reason_str = "tp_hit"; break;
-        case DEAL_REASON_SL:        status = "CLOSED_SL";       close_reason_str = "sl_hit"; break;
+        case DEAL_REASON_SL:
+            if(sl_flag == 2)      { status = "CLOSED_TRAILING"; close_reason_str = "trailing_sl_hit"; }
+            else if(sl_flag == 1) { status = "CLOSED_TRAILING"; close_reason_str = "bep_hit"; }
+            else                  { status = "CLOSED_SL";       close_reason_str = "sl_hit"; }
+            break;
         case DEAL_REASON_SO:        status = "CLOSED_SL";       close_reason_str = "stop_out"; break;
         case DEAL_REASON_CLIENT:    status = "CLOSED_MANUAL";   close_reason_str = "manual_client"; break;
         case DEAL_REASON_MOBILE:    status = "CLOSED_MANUAL";   close_reason_str = "manual_mobile"; break;
         case DEAL_REASON_WEB:       status = "CLOSED_MANUAL";   close_reason_str = "manual_web"; break;
-        case DEAL_REASON_EXPERT:    status = "CLOSED_TRAILING"; close_reason_str = "trailing_or_bep"; break;
+        case DEAL_REASON_EXPERT:
+            // EA closed via PositionClose (rare); inherit SL-flag semantics if any.
+            if(sl_flag == 2)      { status = "CLOSED_TRAILING"; close_reason_str = "trailing_sl_hit"; }
+            else if(sl_flag == 1) { status = "CLOSED_TRAILING"; close_reason_str = "bep_hit"; }
+            else                  { status = "CLOSED_TRAILING"; close_reason_str = "expert_close"; }
+            break;
         default:                    status = "CLOSED_MANUAL";   close_reason_str = StringFormat("reason_%d", (int)reason); break;
     }
 
@@ -347,8 +396,14 @@ void OnTimer()
 // ============================================================================
 void ManageOpenPositions()
 {
-    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
-    if(point <= 0) return;
+    // v0.3.0 (2026-05-07): pip-aware sizing + min-tick-distance guard. _Point
+    // alone caused trail to trigger on micro-cents on 5-digit XAUUSDm. Now uses
+    // standard MQL5 pip = 10*Point on fractional brokers.
+    double pip_size = GetPipSize();
+    if(pip_size <= 0) return;
+    int    digits   = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+    int    stops_level = (int)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+    double min_dist = stops_level * SymbolInfoDouble(_Symbol, SYMBOL_POINT);
 
     for(int i = PositionsTotal() - 1; i >= 0; i--)
     {
@@ -365,42 +420,56 @@ void ManageOpenPositions()
                              : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
 
         double profit_pips = (type == POSITION_TYPE_BUY)
-                             ? (price_now - entry) / point
-                             : (entry - price_now) / point;
+                             ? (price_now - entry) / pip_size
+                             : (entry - price_now) / pip_size;
         if(profit_pips <= 0) continue;  // no profit yet, no management
 
         double new_sl = current_sl;
+        bool   bep_armed = false;
 
         // 1. Break-even — move SL to entry + lock_pips when profit >= trigger
         if(g_config.enable_break_even && profit_pips >= g_config.break_even_trigger_pips)
         {
             double bep_sl = (type == POSITION_TYPE_BUY)
-                            ? entry + g_config.break_even_lock_pips * point
-                            : entry - g_config.break_even_lock_pips * point;
+                            ? entry + g_config.break_even_lock_pips * pip_size
+                            : entry - g_config.break_even_lock_pips * pip_size;
             // Only move SL forward (never backward — never increase risk)
-            if(type == POSITION_TYPE_BUY  && bep_sl > current_sl) new_sl = bep_sl;
-            if(type == POSITION_TYPE_SELL && (current_sl == 0 || bep_sl < current_sl)) new_sl = bep_sl;
+            if(type == POSITION_TYPE_BUY  && bep_sl > current_sl) { new_sl = bep_sl; bep_armed = true; }
+            if(type == POSITION_TYPE_SELL && (current_sl == 0 || bep_sl < current_sl)) { new_sl = bep_sl; bep_armed = true; }
         }
 
         // 2. Trailing stop — follow price by trailing_distance once trigger hit
         if(g_config.enable_trailing && profit_pips >= g_config.trailing_trigger_pips)
         {
             double trail_sl = (type == POSITION_TYPE_BUY)
-                              ? price_now - g_config.trailing_distance_pips * point
-                              : price_now + g_config.trailing_distance_pips * point;
+                              ? price_now - g_config.trailing_distance_pips * pip_size
+                              : price_now + g_config.trailing_distance_pips * pip_size;
             if(type == POSITION_TYPE_BUY  && trail_sl > new_sl) new_sl = trail_sl;
             if(type == POSITION_TYPE_SELL && (new_sl == 0 || trail_sl < new_sl)) new_sl = trail_sl;
         }
 
+        // Min stops-level guard — broker rejects modify if SL too close to current price.
+        if(min_dist > 0 && new_sl != current_sl)
+        {
+            if(type == POSITION_TYPE_BUY  && (price_now - new_sl) < min_dist) continue;
+            if(type == POSITION_TYPE_SELL && (new_sl - price_now) < min_dist) continue;
+        }
+
+        // De-bouncing: don't fire SL modify unless meaningfully different from current
+        // (prevents 7-modifies-in-8-sec storm seen in prod logs trade #2312).
+        double sl_change_pips = MathAbs(new_sl - current_sl) / pip_size;
+        if(sl_change_pips < 1.0) continue;  // < 1 pip change, not worth a modify
+
         // Apply if changed
         if(new_sl != current_sl && new_sl > 0)
         {
-            int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
             new_sl = NormalizeDouble(new_sl, digits);
             if(trade.PositionModify(ticket, new_sl, current_tp))
             {
-                PrintFormat("[DextradeEA] SL moved ticket=%I64u %.2f -> %.2f (profit=%.0fpips)",
-                            ticket, current_sl, new_sl, profit_pips);
+                PrintFormat("[DextradeEA] SL moved ticket=%I64u %.2f -> %.2f (profit=%.0fpips %s)",
+                            ticket, current_sl, new_sl, profit_pips,
+                            bep_armed ? "BEP" : "TRAIL");
+                SetSlModifiedFlag(ticket, bep_armed ? 1 : 2);
             }
         }
     }
@@ -435,6 +504,26 @@ void PollConfig()
 // HELPERS
 // ============================================================================
 
+// Standard MQL5 pip definition: 1 pip = 10 × _Point on 5-digit/3-digit brokers,
+// = 1 × _Point on 4-digit/2-digit. For XAUUSDm Exness (5-digit, point=0.001),
+// 1 pip = 0.01 USD. Critical for trail/BEP config to be human-meaningful.
+double GetPipSize()
+{
+    int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+    return (digits == 3 || digits == 5) ? 10.0 * point : point;
+}
+
+// Compute pip_value: $ PnL per 1 pip per 1.0 lot.
+double GetPipValue()
+{
+    double tick_value = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
+    double tick_size  = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+    double pip_size   = GetPipSize();
+    if(tick_size <= 0) return 0;
+    return (tick_value / tick_size) * pip_size;
+}
+
 double ComputeLotSize(double entry, double sl)
 {
     if(sl <= 0 || entry <= 0) return 0;
@@ -443,17 +532,43 @@ double ComputeLotSize(double entry, double sl)
     double sl_distance = MathAbs(entry - sl);
     if(sl_distance <= 0) return 0;
 
-    double tick_value  = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
-    double tick_size   = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
-    if(tick_size <= 0) return 0;
-    double pip_value   = tick_value / tick_size;
-    double lot_raw     = risk_amount / (sl_distance * pip_value);
+    double pip_size    = GetPipSize();
+    if(pip_size <= 0) return 0;
+    double sl_pips     = sl_distance / pip_size;             // SL distance in pips
+    double pip_value   = GetPipValue();                       // $ per pip per 1 lot
+    if(pip_value <= 0) return 0;
+    double lot_raw     = risk_amount / (sl_pips * pip_value); // lots needed
 
     double lot_step    = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
     double lot_min     = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
     double lot_max     = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
-    double lot_rounded = MathFloor(lot_raw / lot_step) * lot_step;
-    return MathMax(lot_min, MathMin(lot_max, lot_rounded));
+    if(lot_step <= 0) lot_step = 0.01;
+    // Round to nearest step (was floor — caused 0.0076 -> 0 fallback to 0.01,
+    // overshooting target risk silently). Now: round nearest, but if rounded
+    // result would exceed target risk by >50%, reject to caller (return 0).
+    double lot_rounded = MathRound(lot_raw / lot_step) * lot_step;
+    if(lot_rounded < lot_min) lot_rounded = lot_min;
+    if(lot_rounded > lot_max) lot_rounded = lot_max;
+    // Hard guard: reject if min lot already overshoots target by 1.5x.
+    // Caller will mark signal as 'risk_too_small_for_min_lot' rejection.
+    double min_lot_risk = lot_min * sl_pips * pip_value;
+    if(lot_rounded == lot_min && min_lot_risk > risk_amount * 1.5)
+        return 0;
+    return lot_rounded;
+}
+
+// Realized risk_pct given filled lot — for accurate reporting back to backend.
+double ComputeRealizedRiskPct(double entry, double sl, double lot)
+{
+    if(lot <= 0 || sl <= 0 || entry <= 0) return 0;
+    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+    if(balance <= 0) return 0;
+    double pip_size = GetPipSize();
+    double pip_value = GetPipValue();
+    if(pip_size <= 0 || pip_value <= 0) return 0;
+    double sl_pips = MathAbs(entry - sl) / pip_size;
+    double risk_dollar = lot * sl_pips * pip_value;
+    return (risk_dollar / balance) * 100.0;
 }
 
 int CountOurPositions()
@@ -534,11 +649,15 @@ void ReportPaperExecuted(long signal_id, string direction, double lot, double en
 
 void ReportLiveOpened(long signal_id, ulong ticket, double fill, double lot, double sl, double tp, int slip)
 {
+    // v0.3.0: report ACTUAL realized risk_pct based on filled lot + actual SL
+    // distance from fill price (not config target). Captures the lot-rounding
+    // overshoot when min lot > target risk_pct.
+    double realized_risk = ComputeRealizedRiskPct(fill, sl, lot);
     string body = StringFormat(
         "{\"signal_id\":%I64d,\"ea_instance_id\":\"%s\",\"mt5_ticket_id\":%I64u,\"mt5_account_login\":%I64d,\"status\":\"OPEN\",\"execution_price\":%.2f,\"execution_lot\":%.2f,\"execution_sl\":%.2f,\"execution_tp\":%.2f,\"slippage_points\":%d,\"account_balance_at_open\":%.2f,\"risk_pct_used\":%.2f}",
         signal_id, EaInstanceId, ticket, AccountInfoInteger(ACCOUNT_LOGIN),
         fill, lot, sl, tp, slip,
-        AccountInfoDouble(ACCOUNT_BALANCE), g_config.risk_per_trade_pct
+        AccountInfoDouble(ACCOUNT_BALANCE), realized_risk
     );
     HttpPost(ApiBaseUrl + "/api/ea/report", body);
 }
