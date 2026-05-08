@@ -114,6 +114,47 @@ def is_position_active(store, style: str | None = None, log=print) -> tuple[bool
     return (False, f"no_active_for_{style or 'any'}")
 
 
+def has_recent_loss_streak(store, style: str, direction: str, window_hours: int = 4, log=print) -> bool:
+    """Block re-entry if last 2+ closed signals (same style+direction) all hit SL.
+
+    User audit 2026-05-08: H1 LONG signals fired 32 losses in a row at 79% conf
+    while market was topping/reversing. System lacks reversal detection. Until
+    proper reversal logic added, prevent loss-streak doubling-down by hard-stop
+    after 2 consecutive SL-hits in same style+direction within recent window.
+
+    Returns True if streak detected (= block this promotion).
+    """
+    if not store or not getattr(store, "has_db", False):
+        return False
+    target_tf = _STYLE_TO_TF.get(style)
+    if not target_tf:
+        return False
+    try:
+        from datetime import datetime, timezone, timedelta
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=window_hours)).isoformat()
+        r = (
+            store._client.from_("rcs_signals")
+            .select("id,direction,outcome,outcome_at")
+            .eq("timeframe", target_tf)
+            .eq("direction", direction)
+            .in_("outcome", ["TP1_HIT", "TP2_HIT", "TP3_HIT", "SL_HIT"])
+            .gte("outcome_at", cutoff)
+            .order("outcome_at", desc=True)
+            .limit(3)
+            .execute()
+        )
+        rows = r.data or []
+        if len(rows) < 2:
+            return False
+        last_two = rows[:2]
+        if all(row.get("outcome") == "SL_HIT" for row in last_two):
+            log(f"[ea] {style}/{direction} loss-streak detected: last 2 = SL_HIT — block promote")
+            return True
+    except Exception as e:
+        log(f"[ea] loss-streak check failed: {e}")
+    return False
+
+
 def evaluate_for_ea(
     style: str,
     style_signal: dict,

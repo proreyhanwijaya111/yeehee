@@ -28,7 +28,7 @@ try:
     from rcs.composite import compute_rcs
     from rcs.persistence import push_rcs_signal
     from rcs.outcome_tracker import evaluate_pending_signals as rcs_evaluate_outcomes
-    from rcs.confluence import evaluate_for_ea, promote_signal_for_ea, is_position_active, DEFAULT_MIN_CONFIDENCE
+    from rcs.confluence import evaluate_for_ea, promote_signal_for_ea, is_position_active, has_recent_loss_streak, DEFAULT_MIN_CONFIDENCE
     RCS_AVAILABLE = True
 except ImportError:
     RCS_AVAILABLE = False
@@ -365,6 +365,26 @@ def run_once(store: SettingsStore, settings: dict, log=print, trigger_reason: st
                     ("swing",    sig_swing),
                 ):
                     sig_levels = sig_obj.to_dict()
+                    # 2026-05-08 fix CRITICAL: skip degenerate-level signals.
+                    # Audit found 25/25 SHORT signals with 0% WR because
+                    # strategy returned FLAT (no confluence ≥3 met → _flat()
+                    # sets entry=sl=tp1=close). RCS composite then forced
+                    # direction=SHORT based on rcs_score, creating SHORT row
+                    # with zero stop distance → SL_HIT instant on any tick.
+                    # Solution: only push when strategy levels are valid.
+                    entry = sig_levels.get("entry")
+                    sl    = sig_levels.get("sl")
+                    tp1   = sig_levels.get("tp1")
+                    if not (entry and sl and tp1) or abs(entry - sl) < 0.5 or abs(tp1 - entry) < 0.5:
+                        log(f"[rcs] {style_name} levels degenerate (entry={entry} sl={sl} tp1={tp1}) — strategy=FLAT, skip push")
+                        continue
+                    # Also skip when strategy direction disagrees with composite —
+                    # sending mismatched LONG/SHORT to broker EA = false signal.
+                    strategy_side = sig_levels.get("side", "FLAT")
+                    if strategy_side != result_obj.direction and strategy_side in ("LONG", "SHORT"):
+                        log(f"[rcs] {style_name} mismatch: strategy={strategy_side} vs composite={result_obj.direction} — skip")
+                        continue
+
                     rcs_id = push_rcs_signal(
                         store=store,
                         result=result_obj,
@@ -372,9 +392,9 @@ def run_once(store: SettingsStore, settings: dict, log=print, trigger_reason: st
                         spot_price=float(bundle["xau_price"]),
                         atr_14=style_to_atr[style_name],
                         broker_symbol="XAUUSD",
-                        entry=sig_levels.get("entry"),
-                        sl=sig_levels.get("sl"),
-                        tp1=sig_levels.get("tp1"),
+                        entry=entry,
+                        sl=sl,
+                        tp1=tp1,
                         tp2=sig_levels.get("tp2"),
                         log=log,
                     )
@@ -391,6 +411,14 @@ def run_once(store: SettingsStore, settings: dict, log=print, trigger_reason: st
                 ea_min_conf = float(settings.get("ea_min_confidence_pct") or 55) / 100.0
                 if ea_min_conf <= 0:
                     ea_min_conf = DEFAULT_MIN_CONFIDENCE
+                # 2026-05-08 audit: 14-15 UTC NY-open hour shows WR drops to
+                # 19-24% vs 70-100% other hours (high-volatility kills tight
+                # SLs). Dampen by raising effective threshold during this
+                # window. Effectively skips marginal signals at risky hours.
+                _now_hour = now.hour  # 'now' is datetime.now(timezone.utc) from cycle start
+                if _now_hour in (14, 15):
+                    ea_min_conf = max(ea_min_conf, 0.85)
+                    log(f"[ea] NY-open dampener: hour={_now_hour}h UTC, conf threshold raised to {ea_min_conf:.0%}")
                 for style_name, sig_obj in (
                     ("scalper",  sig_scalper),
                     ("intraday", sig_intraday),
@@ -406,6 +434,14 @@ def run_once(store: SettingsStore, settings: dict, log=print, trigger_reason: st
                         style_signal=sig_obj.to_dict(),
                         min_confidence=ea_min_conf,
                     )
+                    # 2026-05-08 audit fix: block re-entry after 2 consecutive
+                    # SL-hits same style+direction within 4h. Prevents the
+                    # "32 H1 LONG losses in a row" pattern from audit when
+                    # system kept firing same direction during market reversal.
+                    if decision.is_executable and decision.side in ("LONG", "SHORT"):
+                        if has_recent_loss_streak(store, style_name, decision.side, window_hours=4, log=log):
+                            log(f"[ea] {style_name} {decision.side} BLOCKED: loss-streak in last 4h")
+                            continue
                     if decision.is_executable:
                         rcs_id = rcs_ids_per_style.get(style_name)
                         if rcs_id:
