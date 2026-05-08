@@ -172,7 +172,7 @@ int GetSlModifiedFlag(ulong ticket)
 // ============================================================================
 int OnInit()
 {
-    Print("[DextradeEA] v0.3.3 init (lot guard relaxed + R:R preserve + BEP at +1R + heartbeat retry)");
+    Print("[DextradeEA] v0.3.4 init (balance-zero guard + lot guard relaxed + R:R preserve + heartbeat retry)");
     SetSafeDefaults();
     PollConfig();   // initial fetch
 
@@ -347,6 +347,14 @@ void OnTimer()
 
     // Max open positions check
     if(CountOurPositions() >= g_config.max_open_positions)
+    {
+        return;
+    }
+
+    // v0.3.4: skip polling if account disconnected (balance=0). EA stays
+    // alive sending heartbeat so user sees STALE alarm in UI when MT5 lost
+    // connection, but doesn't fetch+reject signals (clutter).
+    if(AccountInfoDouble(ACCOUNT_BALANCE) <= 0)
     {
         return;
     }
@@ -659,6 +667,15 @@ double ComputeLotSize(double entry, double sl)
 {
     if(sl <= 0 || entry <= 0) return 0;
     double balance     = AccountInfoDouble(ACCOUNT_BALANCE);
+    // v0.3.4 (2026-05-08): defensive guard — balance=0 means broker disconnected
+    // (MT5 logged out, account session expired, terminal lost connection).
+    // Without this, risk_pct calc divides by 0 → +infinity → all signals
+    // rejected as "inf% > daily_loss_cap". Clear log instead of confusing math.
+    if(balance <= 0)
+    {
+        PrintFormat("[DextradeEA] BALANCE=$0 — broker disconnected? Skipping signal. Re-login MT5 to Exness.");
+        return 0;
+    }
     double risk_amount = balance * (g_config.risk_per_trade_pct / 100.0);
     double sl_distance = MathAbs(entry - sl);
     if(sl_distance <= 0) return 0;

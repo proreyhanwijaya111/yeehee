@@ -499,8 +499,10 @@ def report_execution(report: ExecutionReport):
                     supa.from_("rcs_signals").update({
                         "execution_status": "EXECUTED",
                     }).eq("id", resolved_signal_id).execute()
-                # Mirror close to active_trades (paper sim shadow)
-                _mirror_to_active_trades(supa, report)
+                # 2026-05-08: removed _mirror_to_active_trades call. User
+                # reverted spec: paper drives, broker mirrors via promote
+                # signal flow (not via report mirror). Paper sim now
+                # independent again.
                 return {"ok": True, "execution_id": exec_id, "signal_id": resolved_signal_id,
                         "execution_status": "EXECUTED", "mode": "close-by-ticket"}
 
@@ -546,10 +548,9 @@ def report_execution(report: ExecutionReport):
                 "execution_status": new_signal_status,
             }).eq("id", report.signal_id).execute()
 
-        # Mirror to active_trades (paper sim shadow). OPEN inserts new row,
-        # CLOSE updates existing — REJECTED skipped.
-        _mirror_to_active_trades(supa, report)
-
+        # 2026-05-08: paper not shadow anymore (user reversed spec). Mirror
+        # call removed. Paper sim opens via daemon's open_trade_if_eligible
+        # independent of broker EA reports.
         return {"ok": True, "signal_id": report.signal_id, "execution_status": new_signal_status}
     except Exception as e:
         raise HTTPException(500, f"DB error: {e}")
