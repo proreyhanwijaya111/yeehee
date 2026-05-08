@@ -7,6 +7,117 @@ import traceback
 from datetime import datetime, timezone
 import pandas as pd
 
+
+# 2026-05-09: Module-level gate helpers (Phase β/γ/α). PUBLIC because both
+# the EA-promote path AND paper-open path call them — keeps mirror tight.
+# Earlier these were inline inside EA promote loop; paper bypassed them
+# entirely and opened counter-trend trades that broker never took.
+def _trend_bias_simple(df) -> str:
+    """Return 'BULL' / 'BEAR' / 'NEUTRAL' from EMA50/EMA200 stack."""
+    try:
+        if df is None or len(df) == 0:
+            return "NEUTRAL"
+        last = df.iloc[-1]
+        c = float(last["close"])
+        e50 = float(last.get("ema50") or 0)
+        e200 = float(last.get("ema200") or 0)
+        if e50 <= 0 or e200 <= 0:
+            return "NEUTRAL"
+        if c > e50 > e200:
+            return "BULL"
+        if c < e50 < e200:
+            return "BEAR"
+        return "NEUTRAL"
+    except Exception:
+        return "NEUTRAL"
+
+
+def _exhausted_check(df) -> tuple[bool, str]:
+    """Return (True, reason) if market exhausted (ATR shrinking + RSI extreme)."""
+    try:
+        if df is None or len(df) < 5:
+            return False, ""
+        if "atr14" in df.columns:
+            atrs = df["atr14"].iloc[-3:].values
+            if len(atrs) >= 3 and atrs[0] > atrs[1] > atrs[2]:
+                shrink = (atrs[0] - atrs[2]) / atrs[0] * 100 if atrs[0] > 0 else 0
+                if shrink > 15:
+                    return True, f"ATR shrink {shrink:.0f}% last 3 bars"
+        if "rsi14" in df.columns:
+            rsi3 = df["rsi14"].iloc[-3:].values
+            if all((not pd.isna(r)) and r > 78 for r in rsi3):
+                return True, f"RSI extreme overbought sustained {rsi3[-1]:.0f}"
+            if all((not pd.isna(r)) and r < 22 for r in rsi3):
+                return True, f"RSI extreme oversold sustained {rsi3[-1]:.0f}"
+    except Exception:
+        pass
+    return False, ""
+
+
+def _check_divergence_simple(df, side: str) -> tuple[bool, str]:
+    """Return (True, reason) if RSI divergence against side direction."""
+    try:
+        if df is None or len(df) < 30 or "rsi14" not in df.columns:
+            return False, ""
+        recent = df.iloc[-30:].reset_index(drop=True)
+        highs = recent["high"].values
+        lows = recent["low"].values
+        rsi = recent["rsi14"].values
+        price_peaks = []
+        for i in range(2, len(highs) - 2):
+            if highs[i] > highs[i-1] and highs[i] > highs[i+1] and highs[i] > highs[i-2] and highs[i] > highs[i+2]:
+                price_peaks.append((i, highs[i], rsi[i]))
+        price_troughs = []
+        for i in range(2, len(lows) - 2):
+            if lows[i] < lows[i-1] and lows[i] < lows[i+1] and lows[i] < lows[i-2] and lows[i] < lows[i+2]:
+                price_troughs.append((i, lows[i], rsi[i]))
+        if side == "LONG" and len(price_peaks) >= 2:
+            p1, p2 = price_peaks[-2], price_peaks[-1]
+            if p2[1] > p1[1] and p2[2] < p1[2] and (p1[2] - p2[2]) > 3:
+                return True, f"bearish RSI divergence (price HH {p2[1]:.1f}, RSI LH {p2[2]:.1f}<{p1[2]:.1f})"
+        if side == "SHORT" and len(price_troughs) >= 2:
+            t1, t2 = price_troughs[-2], price_troughs[-1]
+            if t2[1] < t1[1] and t2[2] > t1[2] and (t2[2] - t1[2]) > 3:
+                return True, f"bullish RSI divergence (price LL {t2[1]:.1f}, RSI HL {t2[2]:.1f}>{t1[2]:.1f})"
+    except Exception:
+        pass
+    return False, ""
+
+
+def signal_passes_gates(
+    store,
+    style: str,
+    side: str,
+    bias: str,
+    style_df,
+    log=print,
+) -> tuple[bool, str]:
+    """ONE gate function used by both paper-open + EA-promote paths.
+    Returns (passes, reason). False reason = block.
+    Gates: HTF bias (β), exhaustion (γ), divergence (α), loss-streak.
+    """
+    if side not in ("LONG", "SHORT"):
+        return True, ""  # FLAT signals don't go through gates
+    htf_label = {"scalper": "1h", "intraday": "4h", "swing": "1d"}.get(style, "?")
+    if bias == "BULL" and side == "SHORT":
+        return False, f"{htf_label} bias=BULL (counter-trend)"
+    if bias == "BEAR" and side == "LONG":
+        return False, f"{htf_label} bias=BEAR (counter-trend)"
+    exh, exh_reason = _exhausted_check(style_df)
+    if exh:
+        return False, exh_reason
+    div, div_reason = _check_divergence_simple(style_df, side)
+    if div:
+        return False, div_reason
+    # Loss-streak gate (delayed import to avoid circular)
+    try:
+        from rcs.confluence import has_recent_loss_streak
+        if has_recent_loss_streak(store, style, side, window_hours=4, log=log):
+            return False, "loss-streak in last 4h"
+    except Exception:
+        pass
+    return True, "passes all gates"
+
 from data.price_fetcher import fetch_xau, fetch_intermarket_bundle, fetch_realtime_xau_spot, fetch_yahoo_spot, fetch_stooq_spot, fetch_mt5_spot
 from daemon.trade_tracker import open_trade_if_eligible, update_open_trades
 from daemon.heartbeat import get_worker_id
@@ -421,110 +532,22 @@ def run_once(store: SettingsStore, settings: dict, log=print, trigger_reason: st
                     ea_min_conf = max(ea_min_conf, 0.85)
                     log(f"[ea] NY-open dampener: hour={_now_hour}h UTC, conf threshold raised to {ea_min_conf:.0%}")
 
-                # 2026-05-08 Phase β: Per-style multi-TF bias gate (user spec
-                # "scalper 5m-15m-30m, intraday 30m-1h-4h, swing 4h-1d-1w").
-                # Pragmatic implementation: each style gates on 1-step-up HTF
-                # for trend alignment. Reuses existing fetches (df_1h, df_4h,
-                # df_1d) to avoid new yfinance calls. Granular per-style:
-                #   scalper bias  = 1h trend  (close vs EMA50/EMA200)
-                #   intraday bias = 4h trend
-                #   swing bias    = 1d trend
-                # Block signal direction opposite to its bias. NEUTRAL = allow.
-                def _trend_bias(df, label):
-                    try:
-                        if df is None or len(df) == 0:
-                            return "NEUTRAL"
-                        last = df.iloc[-1]
-                        c = float(last["close"])
-                        e50 = float(last.get("ema50") or 0)
-                        e200 = float(last.get("ema200") or 0)
-                        if e50 <= 0 or e200 <= 0:
-                            return "NEUTRAL"
-                        if c > e50 > e200:
-                            return "BULL"
-                        if c < e50 < e200:
-                            return "BEAR"
-                        return "NEUTRAL"
-                    except Exception:
-                        return "NEUTRAL"
+                # 2026-05-08 Phase β: Per-style HTF bias gate.
+                # 2026-05-09 fix: extracted to PRECOMPUTED dict so BOTH paper-open
+                # path AND broker-promote path can use the same gate decisions.
+                # Earlier paper bypassed all gates → 7 SHORT counter-trend losses
+                # while broker filtered them. Now both paths gated identically.
                 bias_per_style = {
-                    "scalper":  _trend_bias(df_1h, "1h"),
-                    "intraday": _trend_bias(df_4h, "4h"),
-                    "swing":    _trend_bias(df_1d, "1d"),
+                    "scalper":  _trend_bias_simple(df_1h),
+                    "intraday": _trend_bias_simple(df_4h),
+                    "swing":    _trend_bias_simple(df_1d),
                 }
                 log(f"[ea] HTF bias scalper(1h)={bias_per_style['scalper']} "
                     f"intraday(4h)={bias_per_style['intraday']} swing(1d)={bias_per_style['swing']}")
 
-                # 2026-05-08 Phase α: Reversal divergence detector. RSI vs
-                # price divergence on last N bars. If price made higher-high
-                # but RSI made lower-high → bearish divergence (block LONG).
-                # Mirror for bullish divergence (block SHORT).
-                #
-                # Uses simple peak detection: find local max in price + RSI
-                # over last 30 bars (lookback). Compare last 2 peaks. Lookback
-                # 30 = ~2.5h for M5 / 7.5h for M15 / 5d for H1 — captures
-                # significant swing peaks.
-                def _check_divergence(df, side):
-                    """Return (True, reason) if divergence detected against side direction."""
-                    try:
-                        if df is None or len(df) < 30 or "rsi14" not in df.columns:
-                            return False, ""
-                        recent = df.iloc[-30:].reset_index(drop=True)
-                        highs = recent["high"].values
-                        lows  = recent["low"].values
-                        rsi   = recent["rsi14"].values
-
-                        # Find peaks: bar where high > both neighbors
-                        price_peaks = []
-                        for i in range(2, len(highs) - 2):
-                            if highs[i] > highs[i-1] and highs[i] > highs[i+1] and highs[i] > highs[i-2] and highs[i] > highs[i+2]:
-                                price_peaks.append((i, highs[i], rsi[i]))
-                        # Find troughs
-                        price_troughs = []
-                        for i in range(2, len(lows) - 2):
-                            if lows[i] < lows[i-1] and lows[i] < lows[i+1] and lows[i] < lows[i-2] and lows[i] < lows[i+2]:
-                                price_troughs.append((i, lows[i], rsi[i]))
-
-                        if side == "LONG":
-                            # Bearish divergence: last 2 peaks → price HH, RSI LH
-                            if len(price_peaks) >= 2:
-                                p1, p2 = price_peaks[-2], price_peaks[-1]
-                                if p2[1] > p1[1] and p2[2] < p1[2] and (p1[2] - p2[2]) > 3:
-                                    return True, f"bearish RSI divergence (price HH {p2[1]:.1f}, RSI LH {p2[2]:.1f}<{p1[2]:.1f})"
-                        else:  # SHORT
-                            if len(price_troughs) >= 2:
-                                t1, t2 = price_troughs[-2], price_troughs[-1]
-                                if t2[1] < t1[1] and t2[2] > t1[2] and (t2[2] - t1[2]) > 3:
-                                    return True, f"bullish RSI divergence (price LL {t2[1]:.1f}, RSI HL {t2[2]:.1f}>{t1[2]:.1f})"
-                    except Exception:
-                        pass
-                    return False, ""
-
-                # 2026-05-08 Phase γ: Exhaustion filter — skip when market
-                # exhausted (ATR shrinking + RSI extreme sustained). Scalper/
-                # intraday timeframes more sensitive. Computed per-style below.
-                def _exhausted(df, style):
-                    """Return (True, reason) if market exhausted for this TF."""
-                    try:
-                        if df is None or len(df) < 5:
-                            return False, ""
-                        # ATR shrinking: last 3 bars all decreasing
-                        atrs = df["atr14"].iloc[-3:].values if "atr14" in df.columns else []
-                        if len(atrs) >= 3 and atrs[0] > atrs[1] > atrs[2]:
-                            atr_shrink_pct = (atrs[0] - atrs[2]) / atrs[0] * 100 if atrs[0] > 0 else 0
-                            if atr_shrink_pct > 15:
-                                return True, f"ATR shrink {atr_shrink_pct:.0f}% last 3 bars (range/exhaustion)"
-                        # RSI extreme sustained (> 75 or < 25 for 3+ bars)
-                        if "rsi14" in df.columns:
-                            rsi3 = df["rsi14"].iloc[-3:].values
-                            if all(r > 78 for r in rsi3 if not pd.isna(r)):
-                                return True, f"RSI extreme overbought sustained {rsi3[-1]:.0f} (mean revert risk)"
-                            if all(r < 22 for r in rsi3 if not pd.isna(r)):
-                                return True, f"RSI extreme oversold sustained {rsi3[-1]:.0f} (mean revert risk)"
-                    except Exception:
-                        pass
-                    return False, ""
-
+                # 2026-05-09: gate helpers extracted to module level
+                # (_trend_bias_simple, _exhausted_check, _check_divergence_simple,
+                # signal_passes_gates). Both EA + paper paths use them.
                 style_to_df = {"scalper": df_5m, "intraday": df_15m, "swing": df_4h}
 
                 for style_name, sig_obj in (
@@ -543,36 +566,18 @@ def run_once(store: SettingsStore, settings: dict, log=print, trigger_reason: st
                         min_confidence=ea_min_conf,
                     )
 
-                    # Phase β: per-style HTF gate — block counter-trend
+                    # 2026-05-09: ONE gate function (signal_passes_gates) covers
+                    # Phase β (HTF bias) + γ (exhaustion) + α (divergence) +
+                    # loss-streak. Same function called from paper-open path
+                    # below = mirror tight.
                     if decision.is_executable and decision.side in ("LONG", "SHORT"):
-                        bias = bias_per_style.get(style_name, "NEUTRAL")
-                        htf_label = {"scalper":"1h","intraday":"4h","swing":"1d"}.get(style_name, "?")
-                        if bias == "BULL" and decision.side == "SHORT":
-                            log(f"[ea] {style_name} SHORT BLOCKED: {htf_label} bias=BULL (counter-trend)")
-                            continue
-                        if bias == "BEAR" and decision.side == "LONG":
-                            log(f"[ea] {style_name} LONG BLOCKED: {htf_label} bias=BEAR (counter-trend)")
-                            continue
-
-                    # Phase γ: exhaustion filter — block at market top/bottom
-                    if decision.is_executable and decision.side in ("LONG", "SHORT"):
-                        exh, exh_reason = _exhausted(style_to_df.get(style_name), style_name)
-                        if exh:
-                            log(f"[ea] {style_name} {decision.side} BLOCKED: {exh_reason}")
-                            continue
-
-                    # Phase α: reversal divergence — block trades against
-                    # divergence (likely failed continuation).
-                    if decision.is_executable and decision.side in ("LONG", "SHORT"):
-                        div, div_reason = _check_divergence(style_to_df.get(style_name), decision.side)
-                        if div:
-                            log(f"[ea] {style_name} {decision.side} BLOCKED: {div_reason}")
-                            continue
-
-                    # Loss-streak guard (Phase 0, deployed earlier)
-                    if decision.is_executable and decision.side in ("LONG", "SHORT"):
-                        if has_recent_loss_streak(store, style_name, decision.side, window_hours=4, log=log):
-                            log(f"[ea] {style_name} {decision.side} BLOCKED: loss-streak in last 4h")
+                        passes, reason = signal_passes_gates(
+                            store=store, style=style_name, side=decision.side,
+                            bias=bias_per_style.get(style_name, "NEUTRAL"),
+                            style_df=style_to_df.get(style_name), log=log,
+                        )
+                        if not passes:
+                            log(f"[ea] {style_name} {decision.side} BLOCKED: {reason}")
                             continue
 
                     if decision.is_executable:
@@ -702,8 +707,29 @@ def run_once(store: SettingsStore, settings: dict, log=print, trigger_reason: st
         # paper sim. Mirror lifecycle now: paper opens → daemon promotes
         # signal → EA picks up + executes. Broker tab = real fills only.
         try:
+            # 2026-05-09: Recompute bias dict here too (in case the EA-promote
+            # block didn't run — e.g. RCS not available). Cheap pure-pandas read.
+            paper_bias = {
+                "scalper":  _trend_bias_simple(df_1h),
+                "intraday": _trend_bias_simple(df_4h),
+                "swing":    _trend_bias_simple(df_1d),
+            }
+            paper_style_to_df = {"scalper": df_5m, "intraday": df_15m, "swing": df_4h}
             for style, sig_obj in (("scalper", sig_scalper), ("intraday", sig_intraday), ("swing", sig_swing)):
                 sig_dict = sig_obj.to_dict()
+                # Apply same gates as EA-promote so paper mirrors broker's
+                # decision logic (was bypassing → 13 paper vs 4 broker, all
+                # paper SHORTs counter-trend losing). User concern resolved.
+                side = sig_dict.get("side")
+                if side in ("LONG", "SHORT"):
+                    passes, reason = signal_passes_gates(
+                        store=store, style=style, side=side,
+                        bias=paper_bias.get(style, "NEUTRAL"),
+                        style_df=paper_style_to_df.get(style), log=log,
+                    )
+                    if not passes:
+                        log(f"[tracker] paper {style} {side} BLOCKED: {reason}")
+                        continue
                 open_trade_if_eligible(
                     store=store,
                     style=style,
