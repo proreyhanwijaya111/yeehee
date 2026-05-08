@@ -1,0 +1,3 @@
+Source: %USERPROFILE%\OneDrive\Desktop\yeehee - Start All.lnk
+Target: C:\Users\Administrator\yeehee-daemon\scripts\start-all-yeehee.cmd
+Effect: Double-click → launches MT5 + 6 yeehee task scheduler tasks.

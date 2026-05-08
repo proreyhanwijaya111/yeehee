@@ -1,0 +1,13 @@
+Compiled .ex5 lives at:
+  %APPDATA%\MetaQuotes\Terminal\D0E8209F77C8CF37AD8BF550E51FF075\MQL5\Experts\DextradeEA.ex5
+
+Source .mq5 + .ex5 (canonical, version-controlled):
+  rcs/ea/DextradeEA.mq5
+  rcs/ea/DextradeEA.ex5
+
+Recompile workflow:
+  1. Edit rcs/ea/DextradeEA.mq5
+  2. Copy to MT5 Experts dir
+  3. Run: "C:\Program Files\MetaTrader 5\MetaEditor64.exe" /compile:DextradeEA.mq5
+  4. Copy resulting .ex5 back to rcs/ea/
+  5. Trigger yeehee-mt5-attach task to detach+reattach EA

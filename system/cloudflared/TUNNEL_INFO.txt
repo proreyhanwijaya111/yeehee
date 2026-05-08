@@ -1,0 +1,4 @@
+Tunnel ID: 5e18741a-be2f-4fad-95c1-47444a13d061
+Cred file: ~/.cloudflared/5e18741a-be2f-4fad-95c1-47444a13d061.json (keep secret, NOT in this repo)
+Cert file: ~/.cloudflared/cert.pem (keep secret, NOT in this repo)
+DNS: yeehee.clinix.id CNAME -> 5e18741a-be2f-4fad-95c1-47444a13d061.cfargotunnel.com
